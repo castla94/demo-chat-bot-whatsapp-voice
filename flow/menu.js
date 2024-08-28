@@ -1,11 +1,18 @@
 const { addKeyword } = require('@bot-whatsapp/bot')
-const { putWhatsapp } = require('../services/aws');
+const { putWhatsapp,getWhatsapp } = require('../services/aws');
 
 const menu = addKeyword(["Menu","Menú"])
 .addAction(async (ctx, { flowDynamic, state }) => {
     try{
         const name = ctx?.pushName ?? ''
         const numberPhone = ctx.from
+
+        const validateWhatsapp = await getWhatsapp(numberPhone)
+        if(validateWhatsapp && !validateWhatsapp.status){
+            console.log("endFlow Menu")
+            return  endFlow();
+        }
+
         await flowDynamic(name) 
         await flowDynamic([
             {

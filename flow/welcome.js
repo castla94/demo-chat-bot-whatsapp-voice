@@ -1,8 +1,18 @@
 const { addKeyword } = require('@bot-whatsapp/bot')
+const { getWhatsapp } = require('../services/aws');
 
 const welcome =  addKeyword(["buenas","hola","como esta"])
 .addAction(async (ctx, { flowDynamic }) => {
     try{
+
+        const numberPhone = ctx.from
+
+        const validateWhatsapp = await getWhatsapp(numberPhone)
+        if(validateWhatsapp && !validateWhatsapp.status){
+            console.log("endFlow welcome keyword")
+            return  endFlow();
+        }
+
         await flowDynamic([
             {
                 body:'¡Bienvenido a nuestro Restaurante! 🌟\n\n'+

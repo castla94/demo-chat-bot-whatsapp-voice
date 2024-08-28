@@ -10,16 +10,16 @@ const media = addKeyword(EVENTS.MEDIA)
         const numberPhone = ctx.from
         const name = ctx?.pushName ?? ''
 
-        const buffer = await downloadMediaMessage(ctx, "buffer");
-        const pathImg = `${process.cwd()}/media/imagen${numberPhone}-${Date.now()}.jpg`;
-        await fs.writeFileSync(pathImg, buffer);
-
         const validateWhatsapp = await getWhatsapp(numberPhone)
 
         if(validateWhatsapp && !validateWhatsapp.status){
             console.log("endFlow media")
             return  endFlow();
         }
+
+        const buffer = await downloadMediaMessage(ctx, "buffer");
+        const pathImg = `${process.cwd()}/media/imagen${numberPhone}-${Date.now()}.jpg`;
+        await fs.writeFileSync(pathImg, buffer);
 
         await flowDynamic(name+". Voy a validar el pago para confirmarte el pedido.") 
 
