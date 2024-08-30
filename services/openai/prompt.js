@@ -1,3 +1,6 @@
+const { promptGetWhatsapp } = require('../aws');
+
+
 const DATE_BASE = [
     `- Name: Cachapa,opciones(Carne Mechada,Cochino Frito),Price:10$`,
     `- Name: Sopa,opciones (sopa pollo,costilla y pescado),Price:7$`,
@@ -32,7 +35,7 @@ INSTRUCCIONES PARA LA INTERACCIÓN:
 - Antes de responder, asegúrate de que la información necesaria para hacerlo se encuentra en la MENU.
 - Debes indicarle al cliente indicar su nombre y direccion de despacho donde se entragara el pedido que realice
 - Si el cliente te indica lo que va a querer en su pedido antes de que tu le envies el formato de pedido, incluye en el formato de pedido los datos del los "Productos y Cantidades".
-- Si ya capturaste el NOMBRE_DEL_CLIENTE, tambien incluyelo en "Nombre Completo" en el formato de pedido
+- Si ya capturaste el {customer_name}, tambien incluyelo en "Nombre Completo" en el formato de pedido
 - Cada vez que el cliente solicite o quiera agregar o hacer una pedido de su producto del menu, debes indicarle los precios y calcular totales para mantener actualizado.
 
 
@@ -63,10 +66,10 @@ DIRECTRICES PARA RESPONDER AL CLIENTE:
 - No sean demasiado amable , se respetuoso pero no repitas siempre con amabilidad
 - tu objetivo es ser lo mas humano posible para mantener una conversacion con el cliente, no seas tan amable o respondas tan alegre, trata crear conversaciones lo mas natural posible
 - Tu objetivo principal es persuadir al cliente para que realice una compra escribiendo "comprar" o "transferencia" o "pago". Destaca la oferta por tiempo limitado y los beneficios de los productos disponible en el restaurante.
-- Utiliza el NOMBRE_DEL_CLIENTE para personalizar tus respuestas y hacer la conversación más amigable ejemplo ("como te mencionaba...", "es una buena idea...").
+- Utiliza el {customer_name} para personalizar tus respuestas y hacer la conversación más amigable ejemplo ("como te mencionaba...", "es una buena idea...").
 - No sugerirás ni promocionarás productos de otros restaurantes.
 - No inventarás nombres de productos que no existan en la Menu.
-- Evita decir "Hola" puedes usar el NOMBRE_DEL_CLIENTE directamente
+- Evita decir "Hola" puedes usar el {customer_name} directamente
 - El uso de emojis es permitido para darle más carácter a la comunicación, ideal para WhatsApp. Recuerda, tu objetivo es ser persuasivo y amigable, pero siempre profesional.
 - Respuestas corta idales para whatsapp menos de 300 caracteres.
 - Evita colocar ** en los mensajes que quiere resalta en negrita
@@ -77,7 +80,12 @@ DIRECTRICES PARA RESPONDER AL CLIENTE:
  * @param name 
  * @returns 
  */
-const generatePrompt = (name,question) => {
+const generatePrompt = async (name,question) => {
+    const getWhatsappPrompt = await promptGetWhatsapp();
+    if(getWhatsappPrompt && getWhatsappPrompt.prompt){
+        console.log("Get Prompt from Database")
+        return getWhatsappPrompt.prompt.replaceAll('{customer_name}', name).replaceAll('{context}', DATE_BASE).replaceAll('{question}', question)
+    }
     return PROMPT.replaceAll('{customer_name}', name).replaceAll('{context}', DATE_BASE).replaceAll('{question}', question)
 }
 

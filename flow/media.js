@@ -1,5 +1,5 @@
 const { addKeyword,EVENTS } = require('@bot-whatsapp/bot')
-const { putWhatsapp,putWhatsappEmailVendor,getWhatsapp }  = require('../services/aws');
+const { putWhatsapp,putWhatsappEmailVendor,getWhatsapp,whatsappStatus }  = require('../services/aws');
 const { downloadMediaMessage }  = require("@adiwajshing/baileys")
 const fs = require("fs");
 
@@ -10,10 +10,16 @@ const media = addKeyword(EVENTS.MEDIA)
         const numberPhone = ctx.from
         const name = ctx?.pushName ?? ''
 
+        const getWhatsappStatus = await whatsappStatus();
+        if(getWhatsappStatus && !getWhatsappStatus.status){
+            console.log("Chat bot Disabled from database")
+            return  endFlow();
+        }
+
         const validateWhatsapp = await getWhatsapp(numberPhone)
 
         if(validateWhatsapp && !validateWhatsapp.status){
-            console.log("endFlow media")
+            console.log("Chat bot Session Disabled from database : "+numberPhone)
             return  endFlow();
         }
 

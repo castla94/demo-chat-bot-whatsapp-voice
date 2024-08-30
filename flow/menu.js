@@ -1,15 +1,21 @@
 const { addKeyword } = require('@bot-whatsapp/bot')
-const { putWhatsapp,getWhatsapp } = require('../services/aws');
+const { putWhatsapp,getWhatsapp,whatsappStatus } = require('../services/aws');
 
 const menu = addKeyword(["Menu","Menú"])
-.addAction(async (ctx, { flowDynamic, state }) => {
+.addAction(async (ctx, { flowDynamic, state,endFlow }) => {
     try{
         const name = ctx?.pushName ?? ''
         const numberPhone = ctx.from
 
+        const getWhatsappStatus = await whatsappStatus();
+        if(getWhatsappStatus && !getWhatsappStatus.status){
+            console.log("Chat bot Disabled from database")
+            return  endFlow();
+        }
+
         const validateWhatsapp = await getWhatsapp(numberPhone)
         if(validateWhatsapp && !validateWhatsapp.status){
-            console.log("endFlow Menu")
+            console.log("Chat bot Session Disabled from database : "+numberPhone)
             return  endFlow();
         }
 

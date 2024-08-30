@@ -13,7 +13,7 @@ const openai = new OpenAI({
  * @returns {Promise<string>}
  */
 const run = async (name, history,question) => {
-    const prompt = generatePrompt(name,question);
+    const prompt = await generatePrompt(name,question);
     const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [

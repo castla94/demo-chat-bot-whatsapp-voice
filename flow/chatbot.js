@@ -1,6 +1,7 @@
 const { addKeyword,EVENTS } = require('@bot-whatsapp/bot')
 const { run, runDetermine } = require('../services/openai');
-const { getWhatsapp,putWhatsapp,putWhatsappOrderConfirmation } = require('../services/aws');
+const { getWhatsapp,putWhatsapp,putWhatsappOrderConfirmation,whatsappStatus } = require('../services/aws');
+const { setTimeout } = require('timers/promises');
 
 /**
  * Un flujo conversacion que es por defecto cunado no se contgiene palabras claves en otros flujos
@@ -12,9 +13,15 @@ const chatbot = addKeyword(EVENTS.WELCOME)
 
             const numberPhone = ctx.from
 
+            const getWhatsappStatus = await whatsappStatus();
+            if(getWhatsappStatus && !getWhatsappStatus.status){
+                console.log("Chat bot Disabled from database")
+                return  endFlow();
+            }
+
             const validateWhatsapp = await getWhatsapp(numberPhone)
             if(validateWhatsapp && !validateWhatsapp.status){
-                console.log("endFlow welcome 1")
+                console.log("Chat bot Session Disabled from database : "+numberPhone)
                 return  endFlow();
             }
 
@@ -42,10 +49,15 @@ const chatbot = addKeyword(EVENTS.WELCOME)
 
             const numberPhone = ctx.from
 
-            const validateWhatsapp = await getWhatsapp(numberPhone)
+            const getWhatsappStatus = await whatsappStatus(numberPhone)
+            if(getWhatsappStatus && !getWhatsappStatus.status){
+                console.log("Chat bot Disabled from database")
+                return  endFlow();
+            }
 
+            const validateWhatsapp = await getWhatsapp(numberPhone)
             if(validateWhatsapp && !validateWhatsapp.status){
-                console.log("endFlow welcome 2")
+                console.log("Chat bot Session Disabled from database : "+numberPhone)
                 return  endFlow();
             }
 
@@ -64,6 +76,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             const chunks = largeResponse.split(/(?<!\d)\.\s+/g);
             for (const chunk of chunks) {
                 await flowDynamic(chunk)
+                await setTimeout(3000)
             }
 
             newHistory.push({

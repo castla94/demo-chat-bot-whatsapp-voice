@@ -1,4 +1,5 @@
 const axios = require('axios');
+require('dotenv').config();
 
 /**
  * 
@@ -102,9 +103,65 @@ const putWhatsappOrderConfirmation = async (phone, message, status) => {
   }
 };
 
+/**
+ * 
+ * @param {string} any 
+ * @returns {Promise<WhatsappResponse | null>}
+ */
+const whatsappStatus = async () => {
+  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-statatus';
+  const email = process.env.EMAIL_TOKEN;
+  try {
+    const response = await axios.post(endpoint, {
+      email:email
+    });
+    return JSON.parse(response.data.body);
+  } catch (error) {
+    console.log("Error getWhatsappStatus :" + error);
+    return null;
+  }
+};
+
+/**
+ * 
+ * @param {string} any 
+ * @returns {Promise<WhatsappResponse | null>}
+ */
+const promptGetWhatsapp= async () => {
+  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-prompt';
+  const email = process.env.EMAIL_TOKEN;
+  
+  try {
+    const response = await axios.post(endpoint, {
+      email:email
+    });
+    return JSON.parse(response.data.body);
+  } catch (error) {
+    console.log("Error getWhatsappPrompt :" + error);
+    return null;
+  }
+};
+
+const test= async () => {
+  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-prompt';
+  const email = process.env.EMAIL_TOKEN;
+  
+  try {
+    const response = await axios.post(endpoint, {
+      email:email
+    });
+    return response.data;
+  } catch (error) {
+    console.log("Error getWhatsappPrompt :" + error);
+    return null;
+  }
+};
+
 module.exports = {
   getWhatsapp,
   putWhatsapp,
   putWhatsappEmailVendor,
-  putWhatsappOrderConfirmation
+  putWhatsappOrderConfirmation,
+  whatsappStatus,
+  promptGetWhatsapp
 };

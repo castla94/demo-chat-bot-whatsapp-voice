@@ -1,16 +1,23 @@
 const { addKeyword,EVENTS } = require('@bot-whatsapp/bot')
 const { handlerAI } = require("../services/audio")
 const { run, runDetermine } = require('../services/openai');
-const { getWhatsapp,putWhatsapp } = require('../services/aws');
+const { getWhatsapp,putWhatsapp,whatsappStatus } = require('../services/aws');
+const { setTimeout } = require('timers/promises');
 
 const voice = addKeyword(EVENTS.VOICE_NOTE)
 .addAction(async (ctx, {state,endFlow, gotoFlow}) => {
     try{
         const numberPhone = ctx.from
 
+        const getWhatsappStatus = await whatsappStatus();
+        if(getWhatsappStatus && !getWhatsappStatus.status){
+            console.log("Chat bot Disabled from database")
+            return  endFlow();
+        }
+
         const validateWhatsapp = await getWhatsapp(numberPhone)
         if(validateWhatsapp && !validateWhatsapp.status){
-            console.log("endFlow welcome voice")
+            console.log("Chat bot Session Disabled from database : "+numberPhone)
             return  endFlow();
         }
 
@@ -29,10 +36,16 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
             const name = ctx?.pushName ?? ''
             const numberPhone = ctx.from
 
+            const getWhatsappStatus = await whatsappStatus();
+            if(getWhatsappStatus && !getWhatsappStatus.status){
+                console.log("Chat bot Disabled from database")
+                return  endFlow();
+            }
+
             const validateWhatsapp = await getWhatsapp(numberPhone)
 
             if(validateWhatsapp && !validateWhatsapp.status){
-                console.log("endFlow welcome voice 2")
+                console.log("Chat bot Session Disabled from database : "+numberPhone)
                 return  endFlow();
             }
 
@@ -70,6 +83,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
             const chunks = largeResponse.split(/(?<!\d)\.\s+/g);
             for (const chunk of chunks) {
                 await flowDynamic(chunk)
+                await setTimeout(3000)
             }
 
             newHistory.push({
