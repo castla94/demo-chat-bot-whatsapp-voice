@@ -83,7 +83,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
             const chunks = largeResponse.split(/(?<!\d)\.\s+/g);
             for (const chunk of chunks) {
                 await flowDynamic(chunk)
-                await setTimeout(3000)
+                await setTimeout(1000)
             }
 
             newHistory.push({
