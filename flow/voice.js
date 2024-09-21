@@ -94,7 +94,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
 
             const largeResponse = await run(name, newHistory,text)
 
-            const chunks = largeResponse.split(/(?<!\d)[\.\:\n]\s*/g);
+            const chunks = largeResponse.split(/(?<!\d)[\.\:]\s*/g);
             for (const chunk of chunks) {
                 await flowDynamic(chunk)
                 await setTimeout(1000)
