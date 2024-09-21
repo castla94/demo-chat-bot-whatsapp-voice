@@ -50,17 +50,43 @@ const putWhatsapp = async (number, name, status) => {
  * @param {string} number 
  * @returns {Promise<WhatsappResponse | null>}
  */
-const putWhatsappEmailVendor = async (number) => {
+const putWhatsappEmailVendor = async (number,name,message) => {
   const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-email-vendor';
-  
+  const email_token = process.env.EMAIL_TOKEN;
+
   try {
     const response = await axios.post(endpoint, {
-      number
+      number,
+      email_token,
+      name,
+      message
     });
     
-    return response.data;
+    return (response.data.statusCode === 200) ? true : false;
   } catch (error) {
-    console.log("Error putWhatsappEmailVendor :" + error);
+    console.log("Error putWhatsappEmailVendor :" , error);
+    return null;
+  }
+};
+
+
+/**
+ * 
+ * @param {string} message 
+ * @returns {Promise<WhatsappResponse | null>}
+ */
+const regexAlarm = async (message) => {
+  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-sessions-alarm/regex';
+  const email_token = process.env.EMAIL_TOKEN;
+
+  try {
+    const response = await axios.post(endpoint, {
+      email_token,
+      message
+    });    
+    return (response.data.statusCode === 200) ? true : false;
+  } catch (error) {
+    console.log("Error regexAlarm :" , error);
     return null;
   }
 };
@@ -163,5 +189,6 @@ module.exports = {
   putWhatsappEmailVendor,
   putWhatsappOrderConfirmation,
   whatsappStatus,
-  promptGetWhatsapp
+  promptGetWhatsapp,
+  regexAlarm
 };

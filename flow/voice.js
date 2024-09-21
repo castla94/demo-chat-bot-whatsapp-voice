@@ -1,7 +1,7 @@
 const { addKeyword,EVENTS } = require('@bot-whatsapp/bot')
 const { handlerAI } = require("../services/audio")
 const { run, runDetermine } = require('../services/openai');
-const { getWhatsapp,putWhatsapp,whatsappStatus } = require('../services/aws');
+const { getWhatsapp,putWhatsapp,whatsappStatus,regexAlarm,putWhatsappEmailVendor } = require('../services/aws');
 const { setTimeout } = require('timers/promises');
 
 const voice = addKeyword(EVENTS.VOICE_NOTE)
@@ -53,6 +53,20 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
 
             console.log(`[TEXT VOICE]:`,text)
 
+            const getRegexAlarm = await regexAlarm(text)
+            if(getRegexAlarm){
+                console.log("Chat bot Active Alarm : "+numberPhone+", message:",text)
+                const responseAlarm=await putWhatsappEmailVendor(numberPhone,name,text)
+                console.log("putWhatsappEmailVendor: "+responseAlarm)
+                if(responseAlarm){
+                    await flowDynamic(name+". Estamos contactando a un vendedor para atenderte.") 
+                }else{
+                    await flowDynamic(name+". Lo sentimos, pero no tenemos personal disponible en este momento.") 
+                }
+                await putWhatsapp(numberPhone,name,false)
+                return  endFlow();
+            }
+
 
             if (text.toLowerCase().includes('hola') 
                 || text.toLowerCase().includes('buenos dias')
@@ -80,7 +94,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
 
             const largeResponse = await run(name, newHistory,text)
 
-            const chunks = largeResponse.split(/(?<!\d)\.\s+/g);
+            const chunks = largeResponse.split(/(?<!\d)[\.\:\n]\s*/g);
             for (const chunk of chunks) {
                 await flowDynamic(chunk)
                 await setTimeout(1000)

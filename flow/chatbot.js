@@ -1,6 +1,6 @@
 const { addKeyword,EVENTS } = require('@bot-whatsapp/bot')
 const { run, runDetermine } = require('../services/openai');
-const { getWhatsapp,putWhatsapp,putWhatsappOrderConfirmation,whatsappStatus } = require('../services/aws');
+const { getWhatsapp,putWhatsapp,whatsappStatus,regexAlarm,putWhatsappEmailVendor } = require('../services/aws');
 const { setTimeout } = require('timers/promises');
 
 /**
@@ -8,11 +8,12 @@ const { setTimeout } = require('timers/promises');
  */
 //BotWhatsapp.EVENTS.WELCOME
 const chatbot = addKeyword(EVENTS.WELCOME)
-    .addAction(async (ctx, {state,endFlow, gotoFlow}) => {
+    .addAction(async (ctx, {state,endFlow, gotoFlow,flowDynamic}) => {
         try{
 
             const numberPhone = ctx.from
-
+            const name = ctx?.pushName ?? ''
+            
             const getWhatsappStatus = await whatsappStatus();
             if(getWhatsappStatus && !getWhatsappStatus.status){
                 console.log("Chat bot Disabled from database")
@@ -25,19 +26,24 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 return  endFlow();
             }
 
+            const getRegexAlarm = await regexAlarm(ctx.body)
+            if(getRegexAlarm){
+                console.log("Chat bot Active Alarm : "+numberPhone+", message:",ctx.body)
+                const responseAlarm=await putWhatsappEmailVendor(numberPhone,name,ctx.body)
+                console.log("putWhatsappEmailVendor: "+responseAlarm)
+                if(responseAlarm){
+                    await flowDynamic(name+". Estamos contactando a un vendedor para atenderte.") 
+                }else{
+                    await flowDynamic(name+". Lo sentimos, pero no tenemos personal disponible en este momento.") 
+                }
+                await putWhatsapp(numberPhone,name,false)
+                return  endFlow();
+            }
+
             const history = (state.getMyState()?.history ?? [])
             const ai = await runDetermine(history)
 
             console.log(`[QUE QUIERES COMPRAR:`,ai.toLowerCase())
-
-            if (ctx.body.toLowerCase().includes('nombre completo') 
-                && (ctx.body.toLowerCase().includes('número de teléfono')
-            || ctx.body.toLowerCase().includes('numero de telefono') )
-            && (ctx.body.toLowerCase().includes('método de pago')
-            || ctx.body.toLowerCase().includes('método de pago'))) {
-                console.log("putWhatsappOrderConfirmation")
-                await putWhatsappOrderConfirmation(numberPhone,ctx.body,"pending_payment")
-            }
             
         }catch(err){
             console.log(`[ERROR]:`,err)
@@ -48,6 +54,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
         try{
 
             const numberPhone = ctx.from
+            const name = ctx?.pushName ?? ''
 
             const getWhatsappStatus = await whatsappStatus(numberPhone)
             if(getWhatsappStatus && !getWhatsappStatus.status){
@@ -62,7 +69,6 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             }
 
             const newHistory = (state.getMyState()?.history ?? [])
-            const name = ctx?.pushName ?? ''
     
             console.log(`[HISTORY]:`,newHistory)
     
@@ -73,7 +79,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
     
             const largeResponse = await run(name, newHistory,ctx.body)
 
-            const chunks = largeResponse.split(/(?<!\d)\.\s+/g);
+            const chunks = largeResponse.split(/(?<!\d)[\.\:\n]\s*/g);
             for (const chunk of chunks) {
                 await flowDynamic(chunk)
                 await setTimeout(1000)

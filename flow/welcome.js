@@ -2,8 +2,9 @@ const { addKeyword } = require('@bot-whatsapp/bot')
 const { getWhatsapp,whatsappStatus } = require('../services/aws');
 
 const welcome =  addKeyword(["buenas","hola","como esta"])
-.addAction(async (ctx, { flowDynamic,endFlow }) => {
+.addAction(async (ctx, { flowDynamic,endFlow,state }) => {
     try{
+        await state.update({history: []})
 
         const numberPhone = ctx.from
 

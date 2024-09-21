@@ -1,5 +1,5 @@
 const { addKeyword,EVENTS } = require('@bot-whatsapp/bot')
-const { putWhatsapp,putWhatsappEmailVendor,getWhatsapp,whatsappStatus }  = require('../services/aws');
+const { putWhatsapp,putWhatsappEmailVendor }  = require('../services/aws');
 const { downloadMediaMessage }  = require("@adiwajshing/baileys")
 const fs = require("fs");
 
@@ -10,28 +10,20 @@ const media = addKeyword(EVENTS.MEDIA)
         const numberPhone = ctx.from
         const name = ctx?.pushName ?? ''
 
-        const getWhatsappStatus = await whatsappStatus();
-        if(getWhatsappStatus && !getWhatsappStatus.status){
-            console.log("Chat bot Disabled from database")
-            return  endFlow();
-        }
-
-        const validateWhatsapp = await getWhatsapp(numberPhone)
-
-        if(validateWhatsapp && !validateWhatsapp.status){
-            console.log("Chat bot Session Disabled from database : "+numberPhone)
-            return  endFlow();
-        }
-
         const buffer = await downloadMediaMessage(ctx, "buffer");
         const pathImg = `${process.cwd()}/media/imagen${numberPhone}-${Date.now()}.jpg`;
         await fs.writeFileSync(pathImg, buffer);
 
-        await flowDynamic(name+". Voy a validar el pago para confirmarte el pedido.") 
+        const responseAlarm=await putWhatsappEmailVendor(numberPhone,name,"Envio Imagen")
+        console.log("putWhatsappEmailVendor Image Transfer: "+responseAlarm)
 
-        console.log("putWhatsappEmailVendor Image Transfer")
-        
-        await putWhatsappEmailVendor(numberPhone)
+        if(responseAlarm){
+            await flowDynamic(name+". Gracias por enviar el comprobante de pago") 
+            await flowDynamic("Voy a validar el pago") 
+        }else{
+            await flowDynamic(name+". Lo sentimos, pero no tenemos personal disponible en este momento.") 
+        }
+
         await putWhatsapp(numberPhone,name,false)
         
         return  endFlow();

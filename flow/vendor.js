@@ -9,11 +9,15 @@ const vendor = addKeyword("Vendedor")
         const numberPhone = ctx.from
         const name = ctx?.pushName ?? ''
 
-        await flowDynamic(name+". Estamos contactando a un vendedor para atenderte.") 
+        const responseAlarm=await putWhatsappEmailVendor(numberPhone,name,ctx.body)
+        console.log("putWhatsappEmailVendor: "+responseAlarm)
 
-        console.log("putWhatsappEmailVendor")
-        
-        await putWhatsappEmailVendor(numberPhone)
+        if(responseAlarm){
+            await flowDynamic(name+". Estamos contactando a un vendedor para atenderte.") 
+        }else{
+            await flowDynamic(name+". Lo sentimos, pero no tenemos personal disponible en este momento.") 
+        }
+
         await putWhatsapp(numberPhone,name,false)
         
         return  endFlow();
