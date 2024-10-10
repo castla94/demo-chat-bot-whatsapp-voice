@@ -1,1 +1,2 @@
 0 0 28-31 * * [ "$(date +\%d -d tomorrow)" = "01" ] && /home/bitnami/htdocs/demo-chat-bot-whatsapp-voice/backup_session.sh
+0 0 * * * /home/bitnami/htdocs/demo-chat-bot-whatsapp-voice/update_htaccess.sh

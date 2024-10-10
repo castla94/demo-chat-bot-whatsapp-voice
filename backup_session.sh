@@ -1,3 +1,4 @@
+pm2 stop whatsapp-demo
 
 SOURCE_FILE="bot_sessions/baileys_store.json"
 YEAR_SERVER=$(date +"%Y") 
@@ -18,3 +19,7 @@ if [ -f "$SOURCE_FILE" ]; then
 else
     echo "El archivo $SOURCE_FILE no existe."
 fi
+
+rm -rf "$DEST_FILE"
+
+pm2 start whatsapp-demo --max-memory-restart 1536M

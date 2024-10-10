@@ -7,6 +7,9 @@ const { setTimeout } = require('timers/promises');
 const voice = addKeyword(EVENTS.VOICE_NOTE)
 .addAction(async (ctx, {state,endFlow, gotoFlow}) => {
     try{
+
+        const userId = ctx.key.remoteJid; // Obtener el identificador único del usuario (número de teléfono)
+
         const numberPhone = ctx.from
 
         const getWhatsappStatus = await whatsappStatus();
@@ -24,15 +27,18 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
         const history = (state.getMyState()?.history ?? [])
         const ai = await runDetermine(history)
 
-        console.log(`[QUE QUIERES COMPRAR VOICE:`,ai.toLowerCase())
+        console.log(`[QUE QUIERES COMPRAR VOICE:[${userId}] `,ai.toLowerCase())
         
     }catch(err){
-        console.log(`[ERROR VOICE]:`,err)
+        console.log(`[ERROR VOICE]:[${userId}] `,err)
         return
     }
 })
 .addAction(async (ctx, { flowDynamic,endFlow, state,gotoFlow }) => {
     try{
+
+            const userId = ctx.key.remoteJid; // Obtener el identificador único del usuario (número de teléfono)
+
             const name = ctx?.pushName ?? ''
             const numberPhone = ctx.from
 
@@ -51,7 +57,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
 
             const text = await handlerAI(ctx,numberPhone)
 
-            console.log(`[TEXT VOICE]:`,text)
+            console.log(`[TEXT VOICE]:[${userId}] `,text)
 
             const getRegexAlarm = await regexAlarm(text)
             if(getRegexAlarm){
@@ -71,7 +77,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
             if (text.toLowerCase().includes('hola') 
                 || text.toLowerCase().includes('buenos dias')
             || text.toLowerCase().includes('menu') ) {
-                console.log(`[FLOW MENU VOICE]`)
+                console.log(`[FLOW MENU VOICE] [${userId}]`)
                 await flowDynamic(name) 
                 await flowDynamic([
                     {
@@ -85,7 +91,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
 
             const newHistory = (state.getMyState()?.history ?? [])
 
-            console.log(`[HISTORY VOICE]:`,newHistory)
+            console.log(`[HISTORY VOICE]:[${userId}] `,newHistory)
 
             newHistory.push({
                 role: 'user',
@@ -94,7 +100,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
 
             const largeResponse = await run(name, newHistory,text)
 
-            const chunks = largeResponse.split(/(?<!\d)\.|:\n\n/g);
+            const chunks = largeResponse.split(/(?<!\d)\.(?=\s|$)|:\n\n/g);
             for (const chunk of chunks) {
                 await flowDynamic(chunk)
                 await setTimeout(1000)
@@ -113,7 +119,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
             }
 
     }catch(err){
-        console.log(`[ERROR VOICE]:`,err)
+        console.log(`[ERROR VOICE]:[${userId}] `,err)
         return
     }
 });
