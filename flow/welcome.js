@@ -1,31 +1,30 @@
 const { addKeyword } = require('@bot-whatsapp/bot')
-const { getWhatsapp,whatsappStatus } = require('../services/aws');
+const { putWhatsapp,promptGetWhatsapp } = require('../services/aws');
 
-const welcome =  addKeyword(["buenas","hola","como esta"])
+const welcome =  addKeyword(["buenas","hola","como esta","menu"])
 .addAction(async (ctx, { flowDynamic,endFlow,state }) => {
     try{
         await state.update({history: []})
 
         const numberPhone = ctx.from
+        const name = ctx?.pushName ?? ''
 
-        const getWhatsappStatus = await whatsappStatus();
-        if(getWhatsappStatus && !getWhatsappStatus.status){
-            console.log("Chat bot Disabled from database",getWhatsappStatus.status)
-            return  endFlow();
-        }
+        await putWhatsapp(numberPhone,name,true)
 
-        const validateWhatsapp = await getWhatsapp(numberPhone)
-        if(validateWhatsapp && !validateWhatsapp.status){
-            console.log("Chat bot Session Disabled from database : "+numberPhone)
-            return  endFlow();
-        }
+        const getWhatsappPrompt = await promptGetWhatsapp();
 
         await flowDynamic([
             {
-                body:'¡Bienvenido a nuestro Restaurante! 🌟\n\n'+
-                'Estamos encantados de atenderte. ¿En qué podemos ayudarte hoy?'+
-                '\n\n📋 Para ver el menú, escribe: *Menu*\n\n'+
-                '🧑‍💼Para hablar con un vendedor, escribe: *Vendedor*',
+                body:"Hola "+name,
+            }
+        ]) 
+
+        await flowDynamic(getWhatsappPrompt.welcome) 
+
+        await flowDynamic([
+            {
+                body:'Menu',
+                media: getWhatsappPrompt.url_menu
             }
         ]) 
     }catch(err){

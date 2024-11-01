@@ -7,7 +7,7 @@ const { getWhatsapp,putWhatsapp,whatsappStatus,regexAlarm,putWhatsappEmailVendor
 // Crear un almacenamiento para los mensajes de cada usuario
 const userBuffers = {}; // Un objeto para almacenar el buffer de cada usuario
 const userTimeouts = {}; // Un objeto para almacenar el timeout de cada usuario
-const TIMEOUT = 30000; 
+const TIMEOUT = 10000; 
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));

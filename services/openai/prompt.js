@@ -84,7 +84,7 @@ const generatePrompt = async (name,question) => {
     const getWhatsappPrompt = await promptGetWhatsapp();
     if(getWhatsappPrompt && getWhatsappPrompt.prompt){
         console.log("Get Prompt from Database")
-        return getWhatsappPrompt.prompt.replaceAll('{customer_name}', name).replaceAll('{context}', DATE_BASE).replaceAll('{question}', question)
+        return getWhatsappPrompt.prompt.replaceAll('{customer_name}', name).replaceAll('{question}', question)
     }
     return PROMPT.replaceAll('{customer_name}', name).replaceAll('{context}', DATE_BASE).replaceAll('{question}', question)
 }

@@ -12,7 +12,7 @@ const {welcome} = require('./flow/welcome')
 
 const main = async () => {
     const adapterDB = new MockAdapter()
-    const adapterFlow = createFlow([voice,media,menu,chatbot,vendor,welcome])
+    const adapterFlow = createFlow([voice,media,welcome,chatbot,vendor])
     const adapterProvider = createProvider(BaileysProvider)
 
     createBot({

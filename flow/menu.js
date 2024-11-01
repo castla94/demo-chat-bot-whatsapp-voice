@@ -1,5 +1,5 @@
 const { addKeyword } = require('@bot-whatsapp/bot')
-const { putWhatsapp,getWhatsapp,whatsappStatus } = require('../services/aws');
+const { putWhatsapp,getWhatsapp,whatsappStatus,promptGetWhatsapp } = require('../services/aws');
 
 const menu = addKeyword(["Menu"])
 .addAction(async (ctx, { flowDynamic, state,endFlow }) => {
