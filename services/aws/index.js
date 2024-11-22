@@ -93,14 +93,16 @@ const regexAlarm = async (message) => {
 
 /**
  * 
+ * @param {string} name 
  * @param {string} phone 
  * @param {string} message 
  * @param {string} status 
  * @returns {Promise<WhatsappResponse | null>}
  */
-const putWhatsappOrderConfirmation = async (phone, message, status) => {
+const putWhatsappOrderConfirmation = async (name,phone, message, status) => {
   const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-order';
-  
+  const email = process.env.EMAIL_TOKEN;
+
   // Obtener la fecha y hora actual
   const now = new Date();
 
@@ -116,6 +118,8 @@ const putWhatsappOrderConfirmation = async (phone, message, status) => {
   
   try {
     const response = await axios.post(endpoint, {
+      name,
+      email,
       phone,
       message,
       status,

@@ -1,6 +1,6 @@
 const { addKeyword,EVENTS } = require('@bot-whatsapp/bot')
 const { run, runDetermine } = require('../services/openai');
-const { getWhatsapp,putWhatsapp,whatsappStatus,regexAlarm,putWhatsappEmailVendor } = require('../services/aws');
+const { getWhatsapp,putWhatsapp,whatsappStatus,regexAlarm,putWhatsappEmailVendor,putWhatsappOrderConfirmation } = require('../services/aws');
 //const { setTimeout } = require('timers/promises');
 
 
@@ -126,6 +126,14 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 })
         
                 const largeResponse = await run(name, newHistory,combinedMessages)
+
+                if (largeResponse.toLowerCase().includes("pedido recibido".toLowerCase())) {
+                    console.log("Procesing Order",{
+                        name,
+                        numberPhone
+                    });
+                    putWhatsappOrderConfirmation(name,numberPhone,largeResponse,"pending_payment");
+                }
 
                 const chunks = largeResponse.split(/(?<!\d)\.(?=\s|$)|:\n\n/g);
                 for (const chunk of chunks) {

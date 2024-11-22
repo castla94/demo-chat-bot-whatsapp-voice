@@ -14,7 +14,7 @@ const media = addKeyword(EVENTS.MEDIA)
         const pathImg = `${process.cwd()}/media/imagen${numberPhone}-${Date.now()}.jpg`;
         await fs.writeFileSync(pathImg, buffer);
 
-        const responseAlarm=await putWhatsappEmailVendor(numberPhone,name,"Envio Imagen")
+        const responseAlarm=await putWhatsappEmailVendor(numberPhone,name,"Comprobante de Pago Enviado.")
         console.log("putWhatsappEmailVendor Image Transfer: "+responseAlarm)
 
         if(responseAlarm){
