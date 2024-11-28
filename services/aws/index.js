@@ -8,10 +8,11 @@ require('dotenv').config();
  */
 const getWhatsapp = async (number) => {
   const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp';
-  
+  const email = process.env.EMAIL_TOKEN;
+
   try {
     const response = await axios.get(endpoint, {
-      params: { number }
+      params: { number,email }
     });
     
     return response.data;
@@ -30,9 +31,11 @@ const getWhatsapp = async (number) => {
  */
 const putWhatsapp = async (number, name, status) => {
   const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp';
-  
+  const email = process.env.EMAIL_TOKEN;
+
   try {
     const response = await axios.post(endpoint, {
+      email,
       name,
       number,
       status

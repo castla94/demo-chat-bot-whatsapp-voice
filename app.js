@@ -9,6 +9,7 @@ const {menu} = require('./flow/menu')
 const {chatbot} = require('./flow/chatbot')
 const {vendor} = require('./flow/vendor')
 const {welcome} = require('./flow/welcome')
+require('dotenv').config();
 
 const main = async () => {
     const adapterDB = new MockAdapter()
@@ -21,7 +22,7 @@ const main = async () => {
         database: adapterDB,
     })
 
-    QRPortalWeb()
+    QRPortalWeb({port:process.env.PORT})
 }
 
 main()
