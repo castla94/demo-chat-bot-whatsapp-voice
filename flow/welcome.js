@@ -21,7 +21,7 @@ const welcome =  addKeyword(["buenas","hola","como esta","menu"])
 
         await flowDynamic(getWhatsappPrompt.welcome) 
 
-        if(!getWhatsappPrompt.url_menu || getWhatsappPrompt.url_menu === ""){
+        if(!getWhatsappPrompt.url_menu || getWhatsappPrompt.url_menu === "" || getWhatsappPrompt.url_menu === "NA"){
             await flowDynamic([
                 {
                     body:'Menu: '
