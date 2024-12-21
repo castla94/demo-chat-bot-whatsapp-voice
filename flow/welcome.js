@@ -15,7 +15,7 @@ const welcome =  addKeyword(["buenas","hola","como esta","menu"])
 
         await flowDynamic([
             {
-                body:"Hola "+name,
+                body:"Hola",
             }
         ]) 
 

@@ -18,10 +18,10 @@ const media = addKeyword(EVENTS.MEDIA)
         console.log("putWhatsappEmailVendor Image Transfer: "+responseAlarm)
 
         if(responseAlarm){
-            await flowDynamic(name+". Gracias por enviar el comprobante de pago") 
+            await flowDynamic("Gracias por enviar el comprobante de pago") 
             await flowDynamic("Voy a validar el pago") 
         }else{
-            await flowDynamic(name+". Lo sentimos, pero no tenemos personal disponible en este momento.") 
+            await flowDynamic("Lo sentimos, pero no tenemos personal disponible en este momento.") 
         }
 
         await putWhatsapp(numberPhone,name,false)

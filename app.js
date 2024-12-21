@@ -13,7 +13,7 @@ require('dotenv').config();
 
 const main = async () => {
     const adapterDB = new MockAdapter()
-    const adapterFlow = createFlow([voice,media,welcome,chatbot,vendor])
+    const adapterFlow = createFlow([voice,media,welcome,chatbot])
     const adapterProvider = createProvider(BaileysProvider)
 
     createBot({

@@ -65,9 +65,9 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
                 const responseAlarm=await putWhatsappEmailVendor(numberPhone,name,text)
                 console.log("putWhatsappEmailVendor: "+responseAlarm)
                 if(responseAlarm){
-                    await flowDynamic(name+". Estamos contactando a un vendedor para atenderte.") 
+                    await flowDynamic("Estamos contactando a un vendedor para atenderte.") 
                 }else{
-                    await flowDynamic(name+". Lo sentimos, pero no tenemos personal disponible en este momento.") 
+                    await flowDynamic("Lo sentimos, pero no tenemos personal disponible en este momento.") 
                 }
                 await putWhatsapp(numberPhone,name,false)
                 return  endFlow();
