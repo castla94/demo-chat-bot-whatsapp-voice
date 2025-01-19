@@ -18,7 +18,6 @@ const voiceToText = async (path) => {
             file: fs.createReadStream(path),
             model: "whisper-1",
         });
-
         return resp.text;
     } catch (err) {
         console.log("voiceToText: ",err);

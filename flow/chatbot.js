@@ -13,7 +13,6 @@ function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-
 /**
  * Un flujo conversacion que es por defecto cunado no se contgiene palabras claves en otros flujos
  */
@@ -69,7 +68,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             userTimeouts[userId] = setTimeout(async () => {
 
                 const history = (state.getMyState()?.history ?? [])
-                const ai = await runDetermine(history)
+                const ai = await runDetermine(history,numberPhone)
 
                 console.log(`[QUE QUIERES COMPRAR:[${userId}]`,ai.toLowerCase())
     
@@ -125,9 +124,9 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                     content: combinedMessages
                 })
         
-                const largeResponse = await run(name, newHistory,combinedMessages)
+                const largeResponse = await run(name, newHistory,combinedMessages,numberPhone)
 
-                if (largeResponse.toLowerCase().includes("pedido recibido".toLowerCase())) {
+                if (largeResponse.toLowerCase().includes("datos recibidos".toLowerCase())) {
                     console.log("Procesing Order",{
                         name,
                         numberPhone

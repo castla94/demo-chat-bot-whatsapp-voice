@@ -6,10 +6,10 @@ const { setTimeout } = require('timers/promises');
 
 const voice = addKeyword(EVENTS.VOICE_NOTE)
 .addAction(async (ctx, {state,endFlow, gotoFlow}) => {
+
+    const userId = ctx.key.remoteJid; // Obtener el identificador único del usuario (número de teléfono)
+
     try{
-
-        const userId = ctx.key.remoteJid; // Obtener el identificador único del usuario (número de teléfono)
-
         const numberPhone = ctx.from
 
         const getWhatsappStatus = await whatsappStatus();
@@ -25,7 +25,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
         }
 
         const history = (state.getMyState()?.history ?? [])
-        const ai = await runDetermine(history)
+        const ai = await runDetermine(history,numberPhone)
 
         console.log(`[QUE QUIERES COMPRAR VOICE:[${userId}] `,ai.toLowerCase())
         
@@ -35,10 +35,11 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
     }
 })
 .addAction(async (ctx, { flowDynamic,endFlow, state,gotoFlow }) => {
+
+    const userId = ctx.key.remoteJid; // Obtener el identificador único del usuario (número de teléfono)
+
+
     try{
-
-            const userId = ctx.key.remoteJid; // Obtener el identificador único del usuario (número de teléfono)
-
             const name = ctx?.pushName ?? ''
             const numberPhone = ctx.from
 
@@ -82,7 +83,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
                 content: text
             })
 
-            const largeResponse = await run(name, newHistory,text)
+            const largeResponse = await run(name, newHistory,text,numberPhone)
 
             const chunks = largeResponse.split(/(?<!\d)\.(?=\s|$)|:\n\n/g);
             for (const chunk of chunks) {
