@@ -1,6 +1,6 @@
 const { addKeyword,EVENTS } = require('@bot-whatsapp/bot')
 const { run, runDetermine } = require('../services/openai');
-const { getWhatsapp,putWhatsapp,whatsappStatus,regexAlarm,putWhatsappEmailVendor,putWhatsappOrderConfirmation } = require('../services/aws');
+const { getWhatsapp,putWhatsapp,whatsappStatus,regexAlarm,putWhatsappEmailVendor,putWhatsappOrderConfirmation,getWhatsappWhitelist } = require('../services/aws');
 //const { setTimeout } = require('timers/promises');
 
 
@@ -37,6 +37,14 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             
             const numberPhone = ctx.from
             const name = ctx?.pushName ?? ''
+
+            getWhatsappWhitelist
+
+            const validateWhitelist= await getWhatsappWhitelist(numberPhone)
+            if(validateWhitelist){
+                console.log(`Chat bot Session Disabled from WhiteList : [${userId}]`)
+                return  endFlow();
+            }
             
             const getWhatsappStatus = await whatsappStatus();
             if(getWhatsappStatus && !getWhatsappStatus.status){
@@ -91,6 +99,12 @@ const chatbot = addKeyword(EVENTS.WELCOME)
 
             const numberPhone = ctx.from
             const name = ctx?.pushName ?? ''
+
+            const validateWhitelist= await getWhatsappWhitelist(numberPhone)
+            if(validateWhitelist){
+                console.log(`Chat bot Session Disabled from WhiteList : [${userId}]`)
+                return  endFlow();
+            }
 
             const getWhatsappStatus = await whatsappStatus(numberPhone)
             if(getWhatsappStatus && !getWhatsappStatus.status){

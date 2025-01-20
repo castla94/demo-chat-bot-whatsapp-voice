@@ -1,5 +1,5 @@
 const { addKeyword } = require('@bot-whatsapp/bot')
-const { putWhatsapp,promptGetWhatsapp,whatsappStatus,getWhatsapp,postWhatsappConversation } = require('../services/aws');
+const { putWhatsapp,promptGetWhatsapp,getWhatsappWhitelist,postWhatsappConversation } = require('../services/aws');
 
 const welcome =  addKeyword(["buenas","hola","como esta","buenos"])
 .addAction(async (ctx, { flowDynamic,endFlow,state }) => {
@@ -8,6 +8,12 @@ const welcome =  addKeyword(["buenas","hola","como esta","buenos"])
 
         const numberPhone = ctx.from
         const name = ctx?.pushName ?? ''
+
+        const validateWhitelist= await getWhatsappWhitelist(numberPhone)
+        if(validateWhitelist){
+            console.log(`Chat bot Session Disabled from WhiteList : [${numberPhone}]`)
+            return  endFlow();
+        }
 
         await putWhatsapp(numberPhone,name,true)
 

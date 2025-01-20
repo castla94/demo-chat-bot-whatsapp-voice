@@ -66,6 +66,34 @@ const getWhatsappCredit = async () => {
   }
 };
 
+
+function containsPhoneValue(inputString, phone) {
+  return inputString.includes(phone);
+}
+
+/**
+ * 
+ * @returns {Promise<WhatsappResponse | null>}
+ */
+const getWhatsappWhitelist = async (phone) => {
+  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-sessions-whitelist';
+  const email_bk = process.env.EMAIL_TOKEN;
+
+  try {
+    const response = await axios.get(endpoint, {
+      params: { email_bk }
+    });
+
+    if (containsPhoneValue(response.data.item.whitelist, phone)) {
+      return true
+    } 
+    return false;
+  } catch (error) {
+    console.log("Error getWhatsappWhitelist :" + error);
+    return null;
+  }
+};
+
 /**
  * 
  * @param {string} number 
@@ -265,5 +293,6 @@ module.exports = {
   regexAlarm,
   getWhatsappCredit,
   postWhatsappCredit,
-  postWhatsappConversation
+  postWhatsappConversation,
+  getWhatsappWhitelist
 };
