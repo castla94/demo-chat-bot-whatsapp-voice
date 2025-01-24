@@ -13,7 +13,7 @@ const {
 const { defaultLogger } = require('../helpers/cloudWatchLogger');
 
 // Constantes de configuración
-const TIMEOUT_MS = 10000 // Tiempo de espera para procesar mensajes agrupados
+let TIMEOUT_MS = 10000 // Tiempo de espera aleatorio entre 45-60 segundos
 
 // Almacenamiento en memoria para gestionar mensajes de usuarios
 const userBuffers = {} // Buffer de mensajes por usuario
@@ -153,6 +153,8 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 await putWhatsapp(numberPhone, name, false)
                 return endFlow()
             }
+
+            TIMEOUT_MS = Math.floor(Math.random() * (45000 - 10000 + 1) + 10000) // Tiempo de espera aleatorio entre 45-60 segundos
 
             // Configurar timeout para análisis de intención
             userTimeouts[userId] = setTimeout(async () => {
