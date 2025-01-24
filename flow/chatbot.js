@@ -1,176 +1,365 @@
-const { addKeyword,EVENTS } = require('@bot-whatsapp/bot')
-const { run, runDetermine } = require('../services/openai');
-const { getWhatsapp,putWhatsapp,whatsappStatus,regexAlarm,putWhatsappEmailVendor,putWhatsappOrderConfirmation,getWhatsappWhitelist } = require('../services/aws');
-//const { setTimeout } = require('timers/promises');
+const { addKeyword, EVENTS } = require('@bot-whatsapp/bot')
+const { run, runDetermine } = require('../services/openai')
+const { 
+    getWhatsapp,
+    putWhatsapp, 
+    whatsappStatus,
+    regexAlarm,
+    putWhatsappEmailVendor,
+    putWhatsappOrderConfirmation,
+    getWhatsappWhitelist 
+} = require('../services/aws')
 
+const { defaultLogger } = require('../helpers/cloudWatchLogger');
 
-// Crear un almacenamiento para los mensajes de cada usuario
-const userBuffers = {}; // Un objeto para almacenar el buffer de cada usuario
-const userTimeouts = {}; // Un objeto para almacenar el timeout de cada usuario
-const TIMEOUT = 10000; 
+// Constantes de configuración
+const TIMEOUT_MS = 10000 // Tiempo de espera para procesar mensajes agrupados
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
+// Almacenamiento en memoria para gestionar mensajes de usuarios
+const userBuffers = {} // Buffer de mensajes por usuario
+const userTimeouts = {} // Timeouts por usuario
 
 /**
- * Un flujo conversacion que es por defecto cunado no se contgiene palabras claves en otros flujos
+ * Función auxiliar para pausar la ejecución
+ * @param {number} ms - Milisegundos a esperar
+ * @returns {Promise} Promesa que se resuelve después del tiempo especificado
  */
-//BotWhatsapp.EVENTS.WELCOME
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+
+/**
+ * Flujo principal del chatbot que maneja la conversación por defecto
+ * cuando no hay coincidencias con palabras clave
+ */
 const chatbot = addKeyword(EVENTS.WELCOME)
-    .addAction(async (ctx, {state,endFlow, gotoFlow,flowDynamic}) => {
-        try{
-
-            const userId = ctx.key.remoteJid; // Obtener el identificador único del usuario (número de teléfono)
-
-            // Inicializar el buffer y la variable de bienvenida si es la primera vez que el usuario escribe
-            if (!userBuffers[userId]) {
-                userBuffers[userId] = []; // Crear un buffer de mensajes para este usuario
-            }
-    
-            userBuffers[userId].push(ctx.body);
-
-            // Si ya hay un timeout activo para este usuario, lo reiniciamos
-            if (userTimeouts[userId]) {
-                clearTimeout(userTimeouts[userId]);
-            }
-            
+    // Primera acción: Validación inicial y procesamiento de mensajes
+    .addAction(async (ctx, { state, endFlow, flowDynamic }) => {
+        try {
+            const userId = ctx.key.remoteJid
             const numberPhone = ctx.from
             const name = ctx?.pushName ?? ''
 
-            getWhatsappWhitelist
+            defaultLogger.info('Iniciando procesamiento de mensaje', {
+                userId,
+                numberPhone,
+                name,
+                messageBody: ctx.body,
+                action: 'message_received',
+                timestamp: new Date().toISOString(),
+                file: 'chatbot.js'
+            })
 
-            const validateWhitelist= await getWhatsappWhitelist(numberPhone)
-            if(validateWhitelist){
-                console.log(`Chat bot Session Disabled from WhiteList : [${userId}]`)
-                return  endFlow();
+            // Inicializar buffer de mensajes si no existe
+            if (!userBuffers[userId]) {
+                userBuffers[userId] = []
             }
-            
-            const getWhatsappStatus = await whatsappStatus();
-            if(getWhatsappStatus && !getWhatsappStatus.status){
-                console.log("Chat bot Disabled from database")
-                return  endFlow();
-            }
+            userBuffers[userId].push(ctx.body)
 
-            const validateWhatsapp = await getWhatsapp(numberPhone)
-            if(validateWhatsapp && !validateWhatsapp.status){
-                console.log(`Chat bot Session Disabled from database : [${userId}]`)
-                return  endFlow();
-            }
-
-            const getRegexAlarm = await regexAlarm(ctx.body)
-            if(getRegexAlarm){
-                console.log("Chat bot Active Alarm : "+numberPhone+", message:",ctx.body)
-                const responseAlarm=await putWhatsappEmailVendor(numberPhone,name,ctx.body)
-                console.log(`putWhatsappEmailVendor: [${userId}] `+responseAlarm)
-                if(responseAlarm){
-                    await flowDynamic("Estamos contactando a un vendedor para atenderte.") 
-                }else{
-                    await flowDynamic("Lo sentimos, pero no tenemos personal disponible en este momento.") 
-                }
-                await putWhatsapp(numberPhone,name,false)
-                return  endFlow();
+            // Reiniciar timeout si existe
+            if (userTimeouts[userId]) {
+                clearTimeout(userTimeouts[userId])
             }
 
-            // Configuramos un timeout para recolectar los mensajes durante 5 segundos para este usuario
+            // Validar si el usuario está en lista blanca
+            const isWhitelisted = await getWhatsappWhitelist(numberPhone)
+            defaultLogger.info('Verificación de whitelist', {
+                userId,
+                numberPhone,
+                name,
+                isWhitelisted,
+                action: 'whitelist_verification',
+                file: 'chatbot.js'
+            })
+
+            if (isWhitelisted) {
+                defaultLogger.info('Usuario en whitelist, finalizando flujo', {
+                    userId,
+                    numberPhone,
+                    name,
+                    action: 'whitelist_end_flow',
+                    file: 'chatbot.js'
+                })
+                return endFlow()
+            }
+
+            // Validar estado global del chatbot
+            const botStatus = await whatsappStatus()
+            defaultLogger.info('Estado global del bot', {
+                userId,
+                numberPhone,
+                name,
+                botStatus,
+                action: 'global_status_check',
+                file: 'chatbot.js'
+            })
+
+            if (botStatus && !botStatus.status) {
+                defaultLogger.info('Bot desactivado globalmente', {
+                    action: 'global_status_end_flow',
+                    file: 'chatbot.js'
+                })
+                return endFlow()
+            }
+
+            // Validar estado individual del usuario
+            const userStatus = await getWhatsapp(numberPhone)
+            defaultLogger.info('Estado del usuario', {
+                userId,
+                numberPhone,
+                name,
+                userStatus,
+                action: 'user_status_check',
+                file: 'chatbot.js'
+            })
+
+            if (userStatus && !userStatus.status) {
+                defaultLogger.info('Usuario desactivado', {
+                    userId,
+                    numberPhone,
+                    name,
+                    action: 'user_disabled_end_flow',
+                    file: 'chatbot.js'
+                })
+                return endFlow()
+            }
+
+            // Procesar alarmas o palabras clave
+            const hasAlarm = await regexAlarm(ctx.body)
+            defaultLogger.info('Verificación de alarma', {
+                userId,
+                numberPhone,
+                name,
+                messageBody: ctx.body,
+                hasAlarm,
+                action: 'alarm_check',
+                file: 'chatbot.js'
+            })
+
+            if (hasAlarm) {
+                const alarmResponse = await putWhatsappEmailVendor(numberPhone, name, ctx.body)
+                defaultLogger.info('Procesamiento de alarma', {
+                    numberPhone,
+                    name,
+                    message: ctx.body,
+                    alarmResponse,
+                    action: 'alarm_processing',
+                    file: 'chatbot.js'
+                })
+                
+                await flowDynamic(alarmResponse 
+                    ? "Estamos contactando a un vendedor para atenderte."
+                    : "Lo sentimos, pero no tenemos personal disponible en este momento."
+                )
+                
+                await putWhatsapp(numberPhone, name, false)
+                return endFlow()
+            }
+
+            // Configurar timeout para análisis de intención
             userTimeouts[userId] = setTimeout(async () => {
+                const history = state.getMyState()?.history ?? []
+                defaultLogger.info('Iniciando análisis de intención', {
+                    userId,
+                    numberPhone,
+                    name,
+                    history,
+                    action: 'intention_analysis_start',
+                    file: 'chatbot.js'
+                })
 
-                const history = (state.getMyState()?.history ?? [])
-                const ai = await runDetermine(history,numberPhone)
+                const intention = await runDetermine(history, numberPhone)
+                defaultLogger.info('Intención detectada', {
+                    userId,
+                    numberPhone,
+                    name,
+                    intention: intention.toLowerCase(),
+                    history,
+                    action: 'intention_detected',
+                    file: 'chatbot.js'
+                })
+            }, TIMEOUT_MS)
 
-                console.log(`[QUE QUIERES COMPRAR:[${userId}]`,ai.toLowerCase())
-    
-            }, TIMEOUT); //  segundos de espera para este usuario
-            
-        }catch(err){
-            console.log(`[ERROR]:[${userId}]`,err)
-            return
+        } catch (error) {
+            defaultLogger.error('Error en primera acción chatbot flujo', {
+                userId: ctx.key.remoteJid,
+                numberPhone: ctx.from,
+                name: ctx?.pushName,
+                error: error.message,
+                stack: error.stack,
+                context: ctx,
+                file: 'chatbot.js'
+            })
         }
     })
-    .addAction(async (ctx, { flowDynamic,endFlow, state }) => {
-        try{
-
-            const userId = ctx.key.remoteJid; // Obtener el identificador único del usuario (número de teléfono)
-
-            // Si ya hay un timeout activo para este usuario, lo reiniciamos
-            if (userTimeouts[userId]) {
-                clearTimeout(userTimeouts[userId]);
-            }
-
+    // Segunda acción: Procesamiento de respuesta y gestión de conversación
+    .addAction(async (ctx, { flowDynamic, endFlow, state }) => {
+        try {
+            const userId = ctx.key.remoteJid
             const numberPhone = ctx.from
             const name = ctx?.pushName ?? ''
 
-            const validateWhitelist= await getWhatsappWhitelist(numberPhone)
-            if(validateWhitelist){
-                console.log(`Chat bot Session Disabled from WhiteList : [${userId}]`)
-                return  endFlow();
+            defaultLogger.info('Iniciando segunda acción', {
+                userId,
+                numberPhone,
+                name,
+                messageBody: ctx.body,
+                action: 'second_action_start',
+                file: 'chatbot.js'
+            })
+
+            // Reiniciar timeout existente
+            if (userTimeouts[userId]) {
+                clearTimeout(userTimeouts[userId])
             }
 
-            const getWhatsappStatus = await whatsappStatus(numberPhone)
-            if(getWhatsappStatus && !getWhatsappStatus.status){
-                console.log(`Chat bot Disabled from database`)
-                return  endFlow();
+            // Validar si el usuario está en lista blanca
+            const isWhitelisted = await getWhatsappWhitelist(numberPhone)
+            defaultLogger.info('Verificación de whitelist', {
+                userId,
+                numberPhone,
+                name,
+                isWhitelisted,
+                action: 'whitelist_verification',
+                file: 'chatbot.js'
+            })
+
+            if (isWhitelisted) {
+                defaultLogger.info('Usuario en whitelist, finalizando flujo', {
+                    userId,
+                    numberPhone,
+                    name,
+                    action: 'whitelist_end_flow',
+                    file: 'chatbot.js'
+                })
+                return endFlow()
             }
 
-            const validateWhatsapp = await getWhatsapp(numberPhone)
-            if(validateWhatsapp && !validateWhatsapp.status){
-                console.log(`Chat bot Session Disabled from database : `+numberPhone)
-                return  endFlow();
-            }
-                console.log(`[userBuffers[${userId}]]:`,userBuffers[userId])
+            // Validar estado global del chatbot
+            const botStatus = await whatsappStatus()
+            defaultLogger.info('Estado global del bot', {
+                userId,
+                numberPhone,
+                name,
+                botStatus,
+                action: 'global_status_check',
+                file: 'chatbot.js'
+            })
 
-            // Configuramos un timeout para recolectar los mensajes durante 5 segundos para este usuario
+            if (botStatus && !botStatus.status) {
+                defaultLogger.info('Bot desactivado globalmente', {
+                    action: 'global_status_end_flow',
+                    file: 'chatbot.js'
+                })
+                return endFlow()
+            }
+
+            // Validar estado individual del usuario
+            const userStatus = await getWhatsapp(numberPhone)
+            defaultLogger.info('Estado del usuario', {
+                userId,
+                numberPhone,
+                name,
+                userStatus,
+                action: 'user_status_check',
+                file: 'chatbot.js'
+            })
+
+            if (userStatus && !userStatus.status) {
+                defaultLogger.info('Usuario desactivado', {
+                    userId,
+                    numberPhone,
+                    name,
+                    action: 'user_disabled_end_flow',
+                    file: 'chatbot.js'
+                })
+                return endFlow()
+            }
+
+            // Procesar mensajes acumulados
             userTimeouts[userId] = setTimeout(async () => {
-                // Concatenar los mensajes del usuario
-                const combinedMessages = userBuffers[userId].join(' ');
-
-                console.log(`[setTimeout[${userId}]]:`,combinedMessages)
-
-                // Limpiar el buffer del usuario
-                userBuffers[userId] = [];
+                const combinedMessages = userBuffers[userId].join(' ')
+                userBuffers[userId] = [] // Limpiar buffer
 
                 const newHistory = (state.getMyState()?.history ?? [])
-    
-                console.log(`[HISTORY[${userId}]]:`,newHistory)
-        
                 newHistory.push({
                     role: 'user',
                     content: combinedMessages
                 })
-        
-                const largeResponse = await run(name, newHistory,combinedMessages,numberPhone)
 
-                if (largeResponse.toLowerCase().includes("datos recibidos".toLowerCase())) {
-                    console.log("Procesing Order",{
+                defaultLogger.info('Procesando mensajes acumulados', {
+                    userId,
+                    numberPhone,
+                    name,
+                    combinedMessages,
+                    history: newHistory,
+                    action: 'processing_messages',
+                    file: 'chatbot.js'
+                })
+
+                // Obtener respuesta del modelo
+                const response = await run(name, newHistory, combinedMessages, numberPhone)
+                defaultLogger.info('Respuesta del modelo obtenida', {
+                    userId,
+                    numberPhone,
+                    name,
+                    modelResponse: response,
+                    action: 'model_response',
+                    file: 'chatbot.js'
+                })
+
+                // Procesar orden si se detecta
+                if (response.toLowerCase().includes("datos recibidos")) {
+                    const orderConfirmation = await putWhatsappOrderConfirmation(name, numberPhone, response, "pending_payment")
+                    defaultLogger.info('Orden procesada', {
+                        userId,
+                        numberPhone,
                         name,
-                        numberPhone
-                    });
-                    putWhatsappOrderConfirmation(name,numberPhone,largeResponse,"pending_payment");
+                        response,
+                        orderConfirmation,
+                        action: 'order_processing',
+                        file: 'chatbot.js'
+                    })
                 }
 
-                const chunks = largeResponse.split(/(?<!\d)\.(?=\s|$)|:\n\n/g);
+                // Enviar respuesta en chunks
+                const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
+
                 for (const chunk of chunks) {
                     await flowDynamic(chunk)
                     await sleep(2000)
                 }
 
+                // Actualizar historial
                 newHistory.push({
                     role: 'assistant',
-                    content: largeResponse
+                    content: response
                 })
-            
-                await state.update({history: newHistory})
+                await state.update({ history: newHistory })
 
-                if(!validateWhatsapp){
-                    console.log(`putWhatsapp`)
-                    await putWhatsapp(numberPhone,name,true)
+                // Actualizar estado del usuario si es nuevo
+                if (!userStatus) {
+                    const newUserStatus = await putWhatsapp(numberPhone, name, true)
+                    defaultLogger.info('Nuevo usuario registrado', {
+                        userId,
+                        numberPhone,
+                        name,
+                        newUserStatus,
+                        action: 'new_user_registration',
+                        file: 'chatbot.js'
+                    })
                 }
-            }, TIMEOUT); // segundos de espera para este usuario
+            }, TIMEOUT_MS)
 
-        }catch(err){
-            console.log(`[ERROR[${userId}]]:`,err)
+        } catch (error) {
+            defaultLogger.error('Error en segunda acción chatbot flujo', {
+                userId: ctx.key.remoteJid,
+                numberPhone: ctx.from,
+                name: ctx?.pushName,
+                error: error.message,
+                stack: error.stack,
+                context: ctx,
+                file: 'chatbot.js'
+            })
         }
     })
 
-
-    module.exports = { chatbot };
+module.exports = { chatbot }

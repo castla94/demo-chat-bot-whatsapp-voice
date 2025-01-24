@@ -1,129 +1,144 @@
 const axios = require('axios');
+const { defaultLogger } = require('../../helpers/cloudWatchLogger');
 require('dotenv').config();
 
-
+// Constantes para configuración
+const BASE_URL = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV';
 
 /**
- * 
- * @returns {Promise<WhatsappResponse | null>}
+ * Registra créditos para el sistema WhatsApp
+ * @param {number} credit - Cantidad de créditos a registrar
+ * @returns {Promise<Object|null>} Respuesta de la API o null si hay error
  */
 const postWhatsappCredit = async (credit) => {
   const email_bk = process.env.EMAIL_TOKEN;
-  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-setting/credits?email_bk='+email_bk;
+  const endpoint = `${BASE_URL}/whatsapp-setting/credits`;
 
   try {
-    const response = await axios.post(endpoint, {
-      credit
-    });
-    
+    const response = await axios.post(`${endpoint}?email_bk=${email_bk}`, { credit });
     return response.data;
   } catch (error) {
-    console.log("Error postWhatsappCredit :" + error);
+    defaultLogger.error('Error registrando créditos', {
+      credit,
+      error: error.message,
+      stack: error.stack,
+      action: 'post_whatsapp_credit_error',
+      file: 'aws/index.js'
+    });
     return null;
   }
 };
 
-
 /**
- * 
- * @returns {Promise<WhatsappResponse | null>}
+ * Registra una conversación de WhatsApp
+ * @param {string} phone - Número de teléfono
+ * @param {string} message_user - Mensaje del usuario
+ * @param {string} message_openia - Respuesta del sistema
+ * @returns {Promise<Object|null>} Respuesta de la API o null si hay error
  */
-const postWhatsappConversation = async (phone,message_user,message_openia) => {
+const postWhatsappConversation = async (phone, message_user, message_openia) => {
   const email_bk = process.env.EMAIL_TOKEN;
-  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-conversation?email_bk='+email_bk;
+  const endpoint = `${BASE_URL}/whatsapp-conversation`;
+
   try {
-    const response = await axios.post(endpoint, {
+    const response = await axios.post(`${endpoint}?email_bk=${email_bk}`, {
       phone,
       message_user,
       message_openia
     });
-    
     return response.data;
   } catch (error) {
-    console.log("Error postWhatsappCredit :" + error);
+    defaultLogger.error('Error registrando conversación', {
+      phone,
+      error: error.message,
+      stack: error.stack,
+      action: 'post_whatsapp_conversation_error',
+      file: 'aws/index.js'
+    });
     return null;
   }
 };
 
-
 /**
- * 
- * @returns {Promise<WhatsappResponse | null>}
+ * Obtiene los créditos disponibles
+ * @returns {Promise<number|null>} Cantidad de créditos o null si hay error
  */
 const getWhatsappCredit = async () => {
-  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-setting/credits';
+  const endpoint = `${BASE_URL}/whatsapp-setting/credits`;
   const email_bk = process.env.EMAIL_TOKEN;
 
   try {
-    const response = await axios.get(endpoint, {
-      params: { email_bk }
-    });
-    
+    const response = await axios.get(endpoint, { params: { email_bk } });
     return response.data.item.credit;
   } catch (error) {
-    console.log("Error getWhatsappCredit :" + error);
+    defaultLogger.error('Error consultando créditos', {
+      error: error.message,
+      stack: error.stack,
+      action: 'get_whatsapp_credit_error',
+      file: 'aws/index.js'
+    });
     return null;
   }
 };
 
-
-function containsPhoneValue(inputString, phone) {
-  return inputString.includes(phone);
-}
-
 /**
- * 
- * @returns {Promise<WhatsappResponse | null>}
+ * Verifica si un número de teléfono está en la lista blanca
+ * @param {string} phone - Número a verificar
+ * @returns {Promise<boolean|null>} true si está en la lista, false si no, null si hay error
  */
 const getWhatsappWhitelist = async (phone) => {
-  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-sessions-whitelist';
+  const endpoint = `${BASE_URL}/whatsapp-sessions-whitelist`;
   const email_bk = process.env.EMAIL_TOKEN;
 
   try {
-    const response = await axios.get(endpoint, {
-      params: { email_bk }
-    });
-
-    if (containsPhoneValue(response.data.item.whitelist, phone)) {
-      return true
-    } 
-    return false;
+    const response = await axios.get(endpoint, { params: { email_bk } });
+    const isWhitelisted = response.data.item.whitelist.includes(phone);
+    return isWhitelisted;
   } catch (error) {
-    console.log("Error getWhatsappWhitelist :" + error);
+    defaultLogger.error('Error verificando whitelist', {
+      phone,
+      error: error.message,
+      stack: error.stack,
+      action: 'get_whatsapp_whitelist_error',
+      file: 'aws/index.js'
+    });
     return null;
   }
 };
 
 /**
- * 
- * @param {string} number 
- * @returns {Promise<WhatsappResponse | null>}
+ * Obtiene información de un número de WhatsApp
+ * @param {string} number - Número a consultar
+ * @returns {Promise<Object|null>} Datos del número o null si hay error
  */
 const getWhatsapp = async (number) => {
-  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp';
+  const endpoint = `${BASE_URL}/whatsapp`;
   const email = process.env.EMAIL_TOKEN;
 
   try {
-    const response = await axios.get(endpoint, {
-      params: { number,email }
-    });
-    
+    const response = await axios.get(endpoint, { params: { number, email } });
     return response.data;
   } catch (error) {
-    console.log("Error getWhatsapp :" + error);
+    defaultLogger.error('Error obteniendo información de WhatsApp', {
+      number,
+      error: error.message,
+      stack: error.stack,
+      action: 'get_whatsapp_error',
+      file: 'aws/index.js'
+    });
     return null;
   }
 };
 
 /**
- * 
- * @param {string} number 
- * @param {string} name 
- * @param {boolean} status 
- * @returns {Promise<WhatsappResponse | null>}
+ * Actualiza el estado de un número de WhatsApp
+ * @param {string} number - Número a actualizar
+ * @param {string} name - Nombre del usuario
+ * @param {boolean} status - Estado a establecer
+ * @returns {Promise<Object|null>} Respuesta de la API o null si hay error
  */
 const putWhatsapp = async (number, name, status) => {
-  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp';
+  const endpoint = `${BASE_URL}/whatsapp`;
   const email = process.env.EMAIL_TOKEN;
 
   try {
@@ -133,21 +148,30 @@ const putWhatsapp = async (number, name, status) => {
       number,
       status
     });
-    
     return response.data;
   } catch (error) {
-    console.log("Error putWhatsapp :" + error);
+    defaultLogger.error('Error actualizando estado de WhatsApp', {
+      number,
+      name,
+      status,
+      error: error.message,
+      stack: error.stack,
+      action: 'put_whatsapp_error',
+      file: 'aws/index.js'
+    });
     return null;
   }
 };
 
 /**
- * 
- * @param {string} number 
- * @returns {Promise<WhatsappResponse | null>}
+ * Envía notificación por email al vendedor
+ * @param {string} number - Número del cliente
+ * @param {string} name - Nombre del cliente
+ * @param {string} message - Mensaje del cliente
+ * @returns {Promise<boolean|null>} true si se envió correctamente, false si no, null si hay error
  */
-const putWhatsappEmailVendor = async (number,name,message) => {
-  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-email-vendor';
+const putWhatsappEmailVendor = async (number, name, message) => {
+  const endpoint = `${BASE_URL}/whatsapp-email-vendor`;
   const email_token = process.env.EMAIL_TOKEN;
 
   try {
@@ -157,61 +181,114 @@ const putWhatsappEmailVendor = async (number,name,message) => {
       name,
       message
     });
-    
-    return (response.data.statusCode === 200) ? true : false;
+    return response.data.statusCode === 200;
   } catch (error) {
-    console.log("Error putWhatsappEmailVendor :" , error);
+    defaultLogger.error('Error enviando notificación al vendedor', {
+      number,
+      name,
+      error: error.message,
+      stack: error.stack,
+      action: 'put_whatsapp_email_vendor_error',
+      file: 'aws/index.js'
+    });
     return null;
   }
 };
 
-
 /**
- * 
- * @param {string} message 
- * @returns {Promise<WhatsappResponse | null>}
+ * Verifica si un mensaje contiene palabras clave de alarma
+ * @param {string} message - Mensaje a verificar
+ * @returns {Promise<boolean|null>} true si contiene alarmas, false si no, null si hay error
  */
 const regexAlarm = async (message) => {
-  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-sessions-alarm/regex';
+  const endpoint = `${BASE_URL}/whatsapp-sessions-alarm/regex`;
   const email_token = process.env.EMAIL_TOKEN;
 
   try {
     const response = await axios.post(endpoint, {
       email_token,
       message
-    });    
-    return (response.data.statusCode === 200) ? true : false;
+    });
+    return response.data.statusCode === 200;
   } catch (error) {
-    console.log("Error regexAlarm :" , error);
+    defaultLogger.error('Error verificando alarmas', {
+      error: error.message,
+      stack: error.stack,
+      action: 'regex_alarm_error',
+      file: 'aws/index.js'
+    });
     return null;
   }
 };
 
 /**
- * 
- * @param {string} name 
- * @param {string} phone 
- * @param {string} message 
- * @param {string} status 
- * @returns {Promise<WhatsappResponse | null>}
+ * Registra una confirmación de orden
+ * @param {string} name - Nombre del cliente
+ * @param {string} phone - Número del cliente
+ * @param {string} message - Detalles de la orden
+ * @param {string} status - Estado de la orden
+ * @returns {Promise<Object|null>} Respuesta de la API o null si hay error
  */
-const putWhatsappOrderConfirmation = async (name,phone, message, status) => {
-  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-order';
+const putWhatsappOrderConfirmation = async (name, phone, message, status) => {
+  const endpoint = `${BASE_URL}/whatsapp-order`;
   const email = process.env.EMAIL_TOKEN;
 
-  // Obtener la fecha y hora actual
+  // Genera número de orden con formato ddMMyyHHmm-phone
   const now = new Date();
+  const formattedDate = [
+    String(now.getDate()).padStart(2, '0'),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getFullYear()).slice(-2),
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0')
+  ].join('');
+  
+  const order_number = `${formattedDate}-${phone}`;
 
-  // Formatear la fecha y hora en el formato ddMMyyHHmm
-  const formattedDate = 
-      ('0' + now.getDate()).slice(-2) +           // Día (dd)
-      ('0' + (now.getMonth() + 1)).slice(-2) +    // Mes (mm)
-      String(now.getFullYear()).slice(-2) +       // Año (yy)
-      ('0' + now.getHours()).slice(-2) +          // Hora (HH)
-      ('0' + now.getMinutes()).slice(-2); 
-  
-  const order_number = formattedDate + "-" + phone;
-  
+  const { runAnalyzeText } = require('../openai');
+
+  // Analizar y estandarizar el mensaje de la orden
+  try {
+    const analyzedMessage = await runAnalyzeText(message);
+    if (analyzedMessage) {
+      message = analyzedMessage;
+    }
+    defaultLogger.info('Mensaje de orden analizado', {
+      originalMessage: message,
+      analyzedMessage,
+      action: 'analyze_order_message',
+      file: 'aws/index.js'
+    });
+
+
+    // Notificar al vendedor sobre el nuevo comprobante
+    const responseAlarm = await putWhatsappEmailVendor(
+      phone,
+      name,
+      "Información capturada del usuario"
+    )
+
+    if(responseAlarm){
+      defaultLogger.info('Notificación enviada al negocio', {
+          phone,
+          name,
+          responseAlarm,
+          action: 'vendor_notification_sent',
+          file: 'aws/index.js'
+      })
+    }
+
+
+  } catch (error) {
+    defaultLogger.error('Error analizando mensaje de orden', {
+      message,
+      error: error.message,
+      stack: error.stack,
+      action: 'analyze_order_message_error', 
+      file: 'aws/index.js'
+    });
+  }
+
   try {
     const response = await axios.post(endpoint, {
       name,
@@ -221,64 +298,63 @@ const putWhatsappOrderConfirmation = async (name,phone, message, status) => {
       status,
       order_number
     });
-    
     return response.data;
   } catch (error) {
-    console.log("Error putWhatsappOrderConfirmation :" + error);
+    defaultLogger.error('Error confirmando orden', {
+      name,
+      phone,
+      orderNumber: order_number,
+      status,
+      error: error.message,
+      stack: error.stack,
+      action: 'put_whatsapp_order_confirmation_error',
+      file: 'aws/index.js'
+    });
     return null;
   }
 };
 
 /**
- * 
- * @param {string} any 
- * @returns {Promise<WhatsappResponse | null>}
+ * Obtiene el estado global del sistema WhatsApp
+ * @returns {Promise<Object|null>} Estado del sistema o null si hay error
  */
 const whatsappStatus = async () => {
-  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-statatus';
+  const endpoint = `${BASE_URL}/whatsapp-statatus`;
   const email = process.env.EMAIL_TOKEN;
+
   try {
-    const response = await axios.post(endpoint, {
-      email:email
-    });
-    return JSON.parse(response.data.body);
+    const response = await axios.post(endpoint, { email });
+    const status = JSON.parse(response.data.body);
+    return status;
   } catch (error) {
-    console.log("Error getWhatsappStatus :" + error);
+    defaultLogger.error('Error obteniendo estado global', {
+      error: error.message,
+      stack: error.stack,
+      action: 'whatsapp_status_error',
+      file: 'aws/index.js'
+    });
     return null;
   }
 };
 
 /**
- * 
- * @param {string} any 
- * @returns {Promise<WhatsappResponse | null>}
+ * Obtiene el prompt configurado para WhatsApp
+ * @returns {Promise<Object|null>} Configuración del prompt o null si hay error
  */
-const promptGetWhatsapp= async () => {
-  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-prompt';
+const promptGetWhatsapp = async () => {
+  const endpoint = `${BASE_URL}/whatsapp-prompt`;
   const email = process.env.EMAIL_TOKEN;
-  
+
   try {
-    const response = await axios.post(endpoint, {
-      email:email
-    });
+    const response = await axios.post(endpoint, { email });
     return JSON.parse(response.data.body);
   } catch (error) {
-    console.log("Error getWhatsappPrompt :" + error);
-    return null;
-  }
-};
-
-const test= async () => {
-  const endpoint = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV/whatsapp-prompt';
-  const email = process.env.EMAIL_TOKEN;
-  
-  try {
-    const response = await axios.post(endpoint, {
-      email:email
+    defaultLogger.error('Error obteniendo prompt', {
+      error: error.message,
+      stack: error.stack,
+      action: 'prompt_get_whatsapp_error',
+      file: 'aws/index.js'
     });
-    return response.data;
-  } catch (error) {
-    console.log("Error getWhatsappPrompt :" + error);
     return null;
   }
 };
