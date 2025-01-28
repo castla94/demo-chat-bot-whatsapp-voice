@@ -1,55 +1,48 @@
-const openai = require("openai");
+const OpenAI = require("openai");
 const fs = require('fs');
+const { defaultLogger } = require('../../helpers/cloudWatchLogger');
 
-// Configurar la API de OpenAI
-openai.apiKey = process.env.OPENAI_API_KEY; // Asegúrate de tener tu API Key configurada
-
-// Función para leer la imagen
-async function readImage(filePath) {
-    return fs.readFileSync(filePath);
-}
-
-// Función para extraer texto de la imagen usando OpenAI
-async function extractTextFromImage(imagePath) {
-    const imageBuffer = await readImage(imagePath);
-
-    const response = await openai.images.edit({
-        image: imageBuffer,
-        prompt: "Extract the text from the image",
-        n: 1,
-        size: "1024x1024",
-        response_format: "text"
-    });
-
-    const extractedText = response.data; // Dependiendo de cómo OpenAI devuelve la respuesta
-    return extractedText;
-}
-
-// Función para analizar el texto extraído
-async function analyzeText(text) {
-    const response = await openai.chat.completions.create({
-        model: "gpt-4",
-        messages: [
-            { role: "system", content: "Actúa como un asistente que analiza información extraída de imágenes." },
-            { role: "user", content: `Por favor, analiza el siguiente texto extraído de una imagen:\n\n${text}` },
-        ],
-    });
-
-    return response.choices[0].message.content;
-}
-
-// Función principal
 async function processImage(imagePath) {
     try {
-        const extractedText = await extractTextFromImage(imagePath);
-        console.log("Texto Extraído:", extractedText);
+        // Verificar que el archivo existe
+        if (!fs.existsSync(imagePath)) {
+            defaultLogger.error('Archivo de imagen no encontrado', {
+                path: imagePath,
+                error: 'File not found',
+                action: 'process_image',
+                file: 'image/index.js'
+            });
+            throw new Error("No se encuentra el archivo de imagen");
+        }
 
-        const analysis = await analyzeText(extractedText);
-        console.log("Análisis:", analysis);
+        const openai = new OpenAI({
+            apiKey: process.env.OPENAI_API_KEY,
+        });
+
+        // Llamada a la API de OpenAI para analizar la imagen
+        const imagen = fs.createReadStream(imagePath);
+        const respuesta = await openai.createImageVariation({
+            image: imagen,
+        });
+
+        defaultLogger.info('Imagen procesada exitosamente', {
+            path: imagePath,
+            action: 'image_processed',
+            file: 'image/index.js'
+        });
+
+        return respuesta.data;
+
     } catch (error) {
-        console.error("Error:", error);
+        defaultLogger.error('Error procesando imagen', {
+            path: imagePath,
+            error: error.message,
+            stack: error.stack,
+            action: 'process_image_error',
+            file: 'image/index.js'
+        });
+        throw error;
     }
 }
-// Proveer la ruta a tu imagen
-const imagePath = '/Applications/XAMPP/xamppfiles/htdocs/demo-chat-bot-whatsapp-voice/media/imagen56974593859-1723676021166.jpg';
-processImage(imagePath);
+
+module.exports = { processImage };

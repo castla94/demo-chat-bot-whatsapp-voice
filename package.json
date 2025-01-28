@@ -17,7 +17,7 @@
         "@bot-whatsapp/portal": "latest",
         "@bot-whatsapp/provider": "latest",
         "@whiskeysockets/baileys": "6.5.0",
-        "aws-sdk": "^2.1692.0",
+        "@aws-sdk/client-cloudwatch-logs": "^3.0.0",
         "axios": "^1.7.3",
         "bot-ws-plugin-openai": "^1.0.6",
         "cache-manager": "5.2.4",

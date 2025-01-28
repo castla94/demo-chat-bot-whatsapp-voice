@@ -6,7 +6,6 @@ const {
     postWhatsappConversation 
 } = require('../services/aws');
 const { defaultLogger } = require('../helpers/cloudWatchLogger');
-
 /**
  * Welcome flow that handles initial user interaction
  * Manages whitelist validation, conversation history and menu display
