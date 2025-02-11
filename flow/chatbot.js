@@ -154,7 +154,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 return endFlow()
             }
 
-            TIMEOUT_MS = Math.floor(Math.random() * (25000 - 10000 + 1) + 10000) // Tiempo de espera aleatorio entre 45-60 segundos
+            TIMEOUT_MS = Math.floor(Math.random() * (15000 - 10000 + 1) + 10000) // Tiempo de espera aleatorio entre 45-60 segundos
 
             // Configurar timeout para análisis de intención
             userTimeouts[userId] = setTimeout(async () => {

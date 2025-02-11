@@ -347,7 +347,7 @@ const promptGetWhatsapp = async () => {
 
   try {
     const response = await axios.post(endpoint, { email });
-    return JSON.parse(response.data.body);
+    return response.data;
   } catch (error) {
     defaultLogger.error('Error obteniendo prompt', {
       error: error.message,
