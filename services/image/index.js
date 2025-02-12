@@ -1,8 +1,10 @@
 const OpenAI = require("openai");
 const fs = require('fs');
+const { runAnalyzeImage } = require('../openai/index.js');
+
 const { defaultLogger } = require('../../helpers/cloudWatchLogger');
 
-async function processImage(imagePath) {
+async function processImage(imagePath,phone,name) {
     try {
         // Verificar que el archivo existe
         if (!fs.existsSync(imagePath)) {
@@ -15,15 +17,18 @@ async function processImage(imagePath) {
             throw new Error("No se encuentra el archivo de imagen");
         }
 
-        const openai = new OpenAI({
-            apiKey: process.env.OPENAI_API_KEY,
-        });
+        const imageBuffer = fs.readFileSync(imagePath);
+        const base64Image = imageBuffer.toString('base64');
 
         // Llamada a la API de OpenAI para analizar la imagen
-        const imagen = fs.createReadStream(imagePath);
-        const respuesta = await openai.createImageVariation({
-            image: imagen,
-        });
+        const respuesta = await runAnalyzeImage(base64Image,phone,name)
+
+        if(respuesta === "¡Hola! 👋 Gracias por contactarnos. En este momento no podemos atender tu consulta, pero no te preocupes, nos pondremos en contacto contigo lo antes posible. 🙏\nSi necesitas ayuda urgente, puedes dejar un mensaje con los detalles de tu consulta, y te responderemos tan pronto como podamos.\n¡Gracias por tu paciencia! 😊"){
+            return {
+                text:"",
+                img:""
+            }
+        }
 
         defaultLogger.info('Imagen procesada exitosamente', {
             path: imagePath,
@@ -31,7 +36,10 @@ async function processImage(imagePath) {
             file: 'image/index.js'
         });
 
-        return respuesta.data;
+        return {
+            text:respuesta,
+            img:base64Image
+        }
 
     } catch (error) {
         defaultLogger.error('Error procesando imagen', {
@@ -41,7 +49,10 @@ async function processImage(imagePath) {
             action: 'process_image_error',
             file: 'image/index.js'
         });
-        throw error;
+        return {
+            text:"",
+            img:""
+        }
     }
 }
 

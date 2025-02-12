@@ -170,7 +170,7 @@ const putWhatsapp = async (number, name, status) => {
  * @param {string} message - Mensaje del cliente
  * @returns {Promise<boolean|null>} true si se envió correctamente, false si no, null si hay error
  */
-const putWhatsappEmailVendor = async (number, name, message) => {
+const putWhatsappEmailVendor = async (number, name, message,image="") => {
   const endpoint = `${BASE_URL}/whatsapp-email-vendor`;
   const email_token = process.env.EMAIL_TOKEN;
 
@@ -179,7 +179,8 @@ const putWhatsappEmailVendor = async (number, name, message) => {
       number,
       email_token,
       name,
-      message
+      message,
+      image
     });
     return response.data.statusCode === 200;
   } catch (error) {
@@ -265,7 +266,7 @@ const putWhatsappOrderConfirmation = async (name, phone, message, status) => {
     const responseAlarm = await putWhatsappEmailVendor(
       phone,
       name,
-      "Información capturada del usuario"
+      "Información capturada del usuario: \n\n"+message
     )
 
     if(responseAlarm){

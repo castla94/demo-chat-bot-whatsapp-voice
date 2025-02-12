@@ -9,6 +9,7 @@ const {
 const { downloadMediaMessage } = require("@adiwajshing/baileys")
 const fs = require("fs");
 const { defaultLogger } = require('../helpers/cloudWatchLogger');
+const { processImage } = require("../services/image")
 
 /**
  * Flow para manejar eventos de medios (imágenes) enviados por el usuario
@@ -111,11 +112,27 @@ const media = addKeyword(EVENTS.MEDIA)
                 file: 'media.js'
             })
 
+            const responseImage = await processImage(pathImg,numberPhone,name)
+
+            if (!responseImage && !userStatus.status) {
+                defaultLogger.info('Usuario desactivado', {
+                    userId,
+                    numberPhone,
+                    name,
+                    action: 'user_disabled_end_flow',
+                    file: 'media.js'
+                })
+                return endFlow()
+            }
+
+            responseImage.text = responseImage.text.replace(/\n/g, "<br>").replace(/\*\*(.*?)\*\*/g, "<b>$1</b>")
+
             // Notificar al vendedor sobre el nuevo comprobante
             const responseAlarm = await putWhatsappEmailVendor(
                 numberPhone,
                 name,
-                "Comprobante de Pago Enviado."
+                `<br><br>${responseImage.text}<br>`,
+                responseImage.img
             )
             
             defaultLogger.info('Notificación enviada al vendedor', {
@@ -127,16 +144,30 @@ const media = addKeyword(EVENTS.MEDIA)
                 file: 'media.js'
             })
 
+            fs.unlink(pathImg, (error) => {
+                if (error) {
+                    defaultLogger.error('Error eliminando Imagen', {
+                        userId,
+                        numberPhone,
+                        name,
+                        error: error.message,
+                        action: 'delete_image',
+                        file: 'media.js'
+                    });
+                }
+            });
+
             // Enviar respuesta al usuario según disponibilidad
             if (responseAlarm) {
                 await flowDynamic([
-                    "Gracias por enviar el comprobante de pago",
-                    "Voy a validar el pago"
+                    "¡Listo! Recibido.",
+                    "Dame un momento para revisarlo"
                 ])
             } else {
-                await flowDynamic(
-                    "Lo sentimos, pero no tenemos personal disponible en este momento."
-                )
+                await flowDynamic([
+                "Lo sentimos, en este momento nuestro equipo no está disponible para atenderte.",
+                "Por favor, intenta más tarde y te responderemos lo antes posible. ¡Gracias por tu comprensión!"
+                ])
             }
 
             // Actualizar estado del chat

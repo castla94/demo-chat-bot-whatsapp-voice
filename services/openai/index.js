@@ -19,6 +19,7 @@ const calculateCredits = (promptTokens, completionTokens) => {
     return parseFloat(dollarsAmount.toFixed(2));
 };
 
+
 async function processTokenUsage(responseOpenAI, availableCredits, userId, numberPhone, name) {
     const { prompt_tokens, completion_tokens } = responseOpenAI.usage;
     
@@ -57,6 +58,75 @@ async function processTokenUsage(responseOpenAI, availableCredits, userId, numbe
 
     return cost;
 }
+
+
+
+const runAnalyzeImage = async (base64Image,phone,name) => {
+
+    const userId = phone; // Usando el teléfono como userId por consistencia
+    const numberPhone = phone;
+
+    try {
+
+        const availableCredits = await getWhatsappCredit();
+        
+        defaultLogger.info('Verificando créditos para consulta', {
+            userId,
+            numberPhone,
+            name,
+            availableCredits,
+            action: 'credit_check',
+            file: 'openai/index.js'
+        });
+
+        if (availableCredits <= 0) {
+            defaultLogger.info('Sin créditos disponibles', {
+                userId,
+                numberPhone,
+                name,
+                action: 'no_credits',
+                file: 'openai/index.js'
+            });
+            return "¡Hola! 👋 Gracias por contactarnos. En este momento no podemos atender tu consulta, pero no te preocupes, nos pondremos en contacto contigo lo antes posible. 🙏\nSi necesitas ayuda urgente, puedes dejar un mensaje con los detalles de tu consulta, y te responderemos tan pronto como podamos.\n¡Gracias por tu paciencia! 😊";
+        }
+
+        const response = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: "Que es esta imagen?, extraer informacion, categorizala ," +
+                                "identificarla y organizarla en una estructura" +
+                                "La descripcion debe ser breve y no superar los 300 caracteres" +
+                                "Retorna el resultado en formato texto con negritas y saltos de lineas compatibles" +
+                                " para Correo Electronico"
+                        },
+                        {
+                            type: "image_url",
+                            image_url: { url: `data:image/jpeg;base64,${base64Image}` }
+                        },
+                    ],
+                },
+            ],
+            store: true,
+        });
+
+        await processTokenUsage(response, availableCredits, userId, numberPhone, name);
+
+        return response.choices[0].message.content;
+    } catch (error) {
+        defaultLogger.error('Error analyzing image', {
+            error: error.message,
+            stack: error.stack,
+            action: 'analyze_image_error',
+            file: 'openai/index.js'
+        });
+        throw error;
+    }
+};
 
 const run = async (name, history, question, phone) => {
     const userId = phone; // Usando el teléfono como userId por consistencia
@@ -187,4 +257,4 @@ const runAnalyzeText = async (text) => {
     return response.choices[0].message.content;
 }
 
-module.exports = { run, runDetermine, runAnalyzeText };
+module.exports = { run, runDetermine, runAnalyzeText, runAnalyzeImage };
