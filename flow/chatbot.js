@@ -326,7 +326,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
 
                 for (const chunk of chunks) {
-                    await flowDynamic(chunk)
+                    await flowDynamic(chunk.replace(/^[\n]+/, '').trim())
                     await sleep(2000)
                 }
 
