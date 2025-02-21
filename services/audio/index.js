@@ -7,6 +7,85 @@ const { defaultLogger } = require('../../helpers/cloudWatchLogger');
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
+
+const textToVoice = async (userId, numberPhone, name, textToVoice) => {
+
+
+    try {
+        const openai = new OpenAI({
+            apiKey: process.env.OPENAI_API_KEY,
+        });
+
+        defaultLogger.info('Iniciando conversión de texto a voz', {
+            userId,
+            numberPhone,
+            name,
+            action: 'text_to_voice_start',
+            file: 'audio/index.js'
+        });
+
+        // Generate an audio response to the given prompt
+        const response = await openai.chat.completions.create({
+            model: "gpt-4o-audio-preview",
+            modalities: ["text", "audio"],
+            audio: { voice: "onyx", format: "opus" },
+            messages: [
+                {
+                    role: "user",
+                    content: "Por favor, reproduce el siguiente texto exactamente como está escrito, "
+                    +"Habla con un tono cálido y natural, como si estuvieras conversando con un amigo."
+                    +" Usa pausas sutiles entre ideas y frases para dar un ritmo fluido y humano. Varía "
+                    +"ligeramente la entonación para enfatizar palabras clave y sonar más expresivo. "
+                    +"Evita hablar demasiado rápido o de manera monótona; en su lugar, añade pequeñas "
+                    +"respiraciones y cambios en el ritmo para que la conversación fluya de manera orgánica: "
+                    +textToVoice
+                }
+            ],
+            store: true,
+        });
+
+        // Write audio data to a file
+        var pathAudio = `${process.cwd()}/audio/voice-note-${Date.now()}-${numberPhone}.opus`;
+
+        defaultLogger.info('Guardando archivo de audio', {
+            userId,
+            numberPhone,
+            name,
+            path: pathAudio,
+            action: 'save_audio_file',
+            file: 'audio/index.js'
+        });
+
+        await fs.writeFileSync(
+            pathAudio,
+            Buffer.from(response.choices[0].message.audio.data, 'base64'),
+            { encoding: "utf-8" }
+        );
+
+        defaultLogger.info('Conversión de texto a voz completada exitosamente', {
+            userId,
+            numberPhone,
+            name,
+            path: pathAudio,
+            action: 'text_to_voice_success',
+            file: 'audio/index.js'
+        });
+
+        return pathAudio;
+
+    } catch (err) {
+        defaultLogger.error('Error en generando audio', {
+            userId,
+            numberPhone,
+            name,
+            error: err.message,
+            stack: err.stack,
+            action: 'transcription_error',
+            file: 'audio/index.js'
+        });
+        return "ERROR";
+    }
+};
 const voiceToText = async (path, userId, numberPhone, name) => {
     if (!fs.existsSync(path)) {
         defaultLogger.error('Archivo de audio no encontrado', {
@@ -131,4 +210,4 @@ const handlerAI = async (ctx, phone) => {
     }
 };
 
-module.exports = { handlerAI };
+module.exports = { handlerAI, textToVoice };

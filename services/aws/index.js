@@ -360,6 +360,31 @@ const promptGetWhatsapp = async () => {
   }
 };
 
+
+
+/**
+ * Actualiza los productos y servicios en el prompt de WhatsApp
+ * @param {Object} products - Objeto con los productos y servicios a actualizar
+ * @returns {Promise<Object|null>} Resultado de la actualización o null si hay error
+ */
+const promptUpdateProductWhatsapp = async (products) => {
+  const endpoint = `${BASE_URL}/whatsapp-prompt/update-prompt-product-and-services`;
+  const email = process.env.EMAIL_TOKEN;
+
+  try {
+    const response = await axios.post(endpoint, { email, products });
+    return response.data;
+  } catch (error) {
+    defaultLogger.error('Error actualizando promptUpdateProductWhatsapp', {
+      error: error.message,
+      stack: error.stack,
+      action: 'prompt_update_products_whatsapp_error',
+      file: 'aws/index.js'
+    });
+    return null;
+  }
+};
+
 module.exports = {
   getWhatsapp,
   putWhatsapp,
@@ -371,5 +396,6 @@ module.exports = {
   getWhatsappCredit,
   postWhatsappCredit,
   postWhatsappConversation,
-  getWhatsappWhitelist
+  getWhatsappWhitelist,
+  promptUpdateProductWhatsapp
 };

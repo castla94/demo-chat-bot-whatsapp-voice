@@ -1,6 +1,6 @@
 const OpenAI = require("openai");
 const { generatePrompt, generatePromptDetermine } = require("./prompt.js");
-const { getWhatsappCredit, postWhatsappCredit, postWhatsappConversation } = require('../aws/index.js');
+const { getWhatsappCredit, postWhatsappCredit, postWhatsappConversation, promptGetWhatsapp } = require('../aws/index.js');
 const { defaultLogger } = require('../../helpers/cloudWatchLogger.js');
 require('dotenv').config();
 
@@ -172,7 +172,7 @@ const run = async (name, history, question, phone) => {
         await postWhatsappConversation(phone, question, response.choices[0].message.content);
         await processTokenUsage(response, availableCredits, userId, numberPhone, name);
 
-        return response.choices[0].message.content;
+        return response.choices[0].message.content.replace(/\*\*/g, '*');
     } catch (error) {
         defaultLogger.error('Error en procesamiento de consulta', {
             userId,
@@ -229,7 +229,7 @@ const runDetermine = async (history, phone) => {
 
         await processTokenUsage(response, availableCredits, userId, numberPhone, name);
 
-        return response.choices[0].message.content;
+        return response.choices[0].message.content.replace(/\*\*/g, '*');
     } catch (error) {
         defaultLogger.error('Error en determinación', {
             userId,
@@ -257,4 +257,34 @@ const runAnalyzeText = async (text) => {
     return response.choices[0].message.content;
 }
 
-module.exports = { run, runDetermine, runAnalyzeText, runAnalyzeImage };
+// Función para analizar el texto extraído
+const runUpdatePromptServicesProduct = async (text) => {
+    const whatsappPrompt = await promptGetWhatsapp()
+
+    const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+            { role: "system", content: "Analiza y actualiza la información en prompt_servicio_productos con los nuevos datos de actualizacion_servicio_productos. " +
+                "Actualiza los siguientes aspectos:\n" +
+                "1. Inventario de productos y niveles de stock\n" +
+                "2. Disponibilidad de alquiler y programación\n" +
+                "3. Calendarios de servicios y franjas horarias\n" +
+                "4. Precios y condiciones si aplica\n" +
+                "5. Especificaciones de productos o detalles de servicios\n\n" +
+                "Mantén la consistencia y el formato de los datos mientras integras la nueva información. " +
+                "Asegúrate de que todas las actualizaciones se reflejen correctamente en la estructura final de prompt_servicio_productos. " +
+                "Maneja la información específica de fechas con precisión y valida todos los cambios de inventario." +
+                "Debes respetar el formato de prompt_servicio_productos y retornar la nueva informacion actualizada en el mismo formato"
+            },
+            { role: "user", content: `Tienes este contenido y necesito que lo tomes como referencia para 
+                actualizar la informacon: ${whatsappPrompt.products} luego ajustar de acuerdo a estos datos, modifica el formato de la informacion original
+                 solo que cambia las partes necesarias para actualizar la informacion  y ademas responde en formato text 
+                 y manten tambien el formato original no añadas informacion adicional solo el horario asignado para que 
+                 quede ocupado o el stock al inventario sea el canso que corresponda: ${text}` },
+        ],
+    });
+
+    return response.choices[0].message.content;
+}
+
+module.exports = { run, runDetermine, runAnalyzeText, runAnalyzeImage, runUpdatePromptServicesProduct };

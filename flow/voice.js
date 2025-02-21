@@ -1,13 +1,16 @@
 const { addKeyword, EVENTS } = require('@bot-whatsapp/bot')
 const { handlerAI } = require("../services/audio")
-const { run, runDetermine } = require('../services/openai')
+const { run, runDetermine, runUpdatePromptServicesProduct } = require('../services/openai')
 const { 
     getWhatsapp,
     putWhatsapp,
     whatsappStatus, 
     regexAlarm,
     putWhatsappEmailVendor,
-    getWhatsappWhitelist 
+    getWhatsappWhitelist,
+    putWhatsappOrderConfirmation,
+    promptUpdateProductWhatsapp ,
+    promptGetWhatsapp
 } = require('../services/aws')
 const { setTimeout } = require('timers/promises')
 const { defaultLogger } = require('../helpers/cloudWatchLogger')
@@ -208,37 +211,9 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
                 file: 'voice.js'
             })
 
-            // Procesar alarmas o palabras clave
-            const hasAlarm = await regexAlarm(transcribedText)
-            defaultLogger.info('Verificación de alarma', {
-                userId,
-                numberPhone,
-                name,
-                messageBody: transcribedText,
-                hasAlarm,
-                action: 'alarm_check',
-                file: 'voice.js'
-            })
-
-            if (hasAlarm) {
-                const alarmResponse = await putWhatsappEmailVendor(numberPhone, name, transcribedText)
-                defaultLogger.info('Procesamiento de alarma', {
-                    numberPhone,
-                    name,
-                    message: transcribedText,
-                    alarmResponse,
-                    action: 'alarm_processing',
-                    file: 'voice.js'
-                })
-                
-                await flowDynamic(alarmResponse 
-                    ? "Estamos contactando a un vendedor para atenderte."
-                    : "Lo sentimos, pero no tenemos personal disponible en este momento."
-                )
-                
-                await putWhatsapp(numberPhone, name, false)
-                return endFlow()
-            }
+            // Call the alarm processing method
+            const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, transcribedText,transcribedText)
+            if (shouldEndFlow) return endFlow()
 
             // Actualizar historial de conversación
             const newHistory = state.getMyState()?.history ?? []
@@ -267,6 +242,48 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
                 action: 'model_response',
                 file: 'voice.js'
             })
+
+            // Call the alarm processing method
+            const shouldEndFlow2 = await processAlarm(ctx, numberPhone, name, flowDynamic, response,transcribedText)
+            if (shouldEndFlow2) return endFlow()
+
+            // Procesar orden si se detecta
+            if (response.toLowerCase().includes("datos recibidos")) {
+
+                const whatsappPrompt = await promptGetWhatsapp();
+                if(whatsappPrompt.products_dynamic){
+                        const updatePrompt = await runUpdatePromptServicesProduct(response);
+                        defaultLogger.info('Prompt actualizado', {
+                            userId,
+                            numberPhone,
+                            name,
+                            updatePrompt,
+                            action: 'update_prompt_complete',
+                            file: 'voice.js'
+                        });
+
+                        const responseUpdateProductWhatsapp = await promptUpdateProductWhatsapp(updatePrompt);
+                        defaultLogger.info('Respuesta de actualización de producto prompt', {
+                            userId,
+                            numberPhone,
+                            name,
+                            responseUpdateProductWhatsapp,
+                            action: 'product_update_response',
+                            file: 'voice.js'
+                        });
+                }
+
+                const orderConfirmation = await putWhatsappOrderConfirmation(name, numberPhone, response, "pending_payment")
+                defaultLogger.info('Orden procesada', {
+                    userId,
+                    numberPhone,
+                    name,
+                    response,
+                    orderConfirmation,
+                    action: 'order_processing',
+                    file: 'voice.js'
+                })
+            }
 
             // Enviar respuesta en chunks para mejor legibilidad
             const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
@@ -309,5 +326,41 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
             return endFlow()
         }
     })
+
+
+    // Process alarms through dedicated method
+const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,message) => {
+    const hasAlarm = await regexAlarm(question)
+    defaultLogger.info('Verificación de alarma', {
+        userId: ctx.key.remoteJid,
+        numberPhone,
+        name,
+        messageBody: question,
+        hasAlarm,
+        action: 'alarm_check',
+        file: 'chatbot.js'
+    })
+
+    if (hasAlarm) {
+        const alarmResponse = await putWhatsappEmailVendor(numberPhone, name, message)
+        defaultLogger.info('Procesamiento de alarma', {
+            numberPhone,
+            name,
+            message: ctx.body,
+            alarmResponse,
+            action: 'alarm_processing',
+            file: 'chatbot.js'
+        })
+        
+        await flowDynamic(alarmResponse 
+            ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo."
+            : "Lo sentimos, pero no tenemos personal disponible en este momento."
+        )
+        
+        await putWhatsapp(numberPhone, name, false)
+        return true
+    }
+    return false
+}
 
 module.exports = { voice }

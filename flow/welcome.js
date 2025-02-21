@@ -6,6 +6,9 @@ const {
     postWhatsappConversation 
 } = require('../services/aws');
 const { defaultLogger } = require('../helpers/cloudWatchLogger');
+const fs = require("fs");
+
+const { textToVoice } = require('../services/audio');
 /**
  * Welcome flow that handles initial user interaction
  * Manages whitelist validation, conversation history and menu display
@@ -16,7 +19,7 @@ const welcome = addKeyword([
     "como esta",
     "buenos"
 ])
-.addAction(async (ctx, { flowDynamic, endFlow, state }) => {
+.addAction(async (ctx, { flowDynamic, endFlow, state,provider }) => {
     try {
         const userId = ctx.key.remoteJid
         const userPhone = ctx.from
@@ -95,17 +98,34 @@ const welcome = addKeyword([
         // Send welcome message
         await flowDynamic(whatsappPrompt.welcome)
 
+        /*
+        const pathAudio = await textToVoice(userId, userPhone, userName,whatsappPrompt.welcome)
+        await provider.sendAudio(ctx.from+"@s.whatsapp.net", pathAudio)
+        */
+
         // Display menu based on configuration
         await displayMenu(whatsappPrompt, flowDynamic)
 
-    } catch (error) {
+       /* fs.unlink(pathAudio, (error) => {
+            if (error) {
+                defaultLogger.error('Error eliminando audio', {
+                    userId,
+                    numberPhone,
+                    name,
+                    error: error.message,
+                    action: 'delete_audio',
+                    file: 'audio/index.js'
+                });
+            }
+        });*/
+
+    } catch (err) {
+        console.log("error",err)
         defaultLogger.error('Error en welcome flujo', {
             userId: ctx.key.remoteJid,
             numberPhone: ctx.from,
             name: ctx?.pushName,
-            error: error.message,
-            stack: error.stack,
-            context: ctx,
+            error: err,
             file: 'welcome.js'
         })
     }
@@ -121,13 +141,14 @@ const displayMenu = async (whatsappPrompt, flowDynamic) => {
                            whatsappPrompt.url_menu !== "" && 
                            whatsappPrompt.url_menu !== "NA"
 
+    /*                      
     if (!hasValidMenuUrl) {
         await flowDynamic([{
             body: whatsappPrompt.products
         }])
         return
     }
-
+*/
     await flowDynamic([{
         body: '.',
         media: whatsappPrompt.url_menu
