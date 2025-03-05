@@ -141,14 +141,14 @@ const displayMenu = async (whatsappPrompt, flowDynamic) => {
                            whatsappPrompt.url_menu !== "" && 
                            whatsappPrompt.url_menu !== "NA"
 
-    /*                      
+                         
     if (!hasValidMenuUrl) {
         await flowDynamic([{
             body: whatsappPrompt.products
         }])
         return
     }
-*/
+
     await flowDynamic([{
         body: '.',
         media: whatsappPrompt.url_menu
