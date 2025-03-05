@@ -15,7 +15,7 @@ const calculateCostInDollars = (promptTokens, completionTokens) => {
 };
 
 const calculateCredits = (promptTokens, completionTokens) => {
-    const dollarsAmount = calculateCostInDollars(promptTokens, completionTokens) / 0.01;
+    const dollarsAmount = calculateCostInDollars(promptTokens, completionTokens) / 0.001;
     return parseFloat(dollarsAmount.toFixed(2));
 };
 
