@@ -43,7 +43,6 @@ async function processTokenUsage(responseOpenAI, availableCredits, userId, numbe
         file: 'openai/index.js'
     });
 
-    if (availableCredits >= cost) {
         const newCredits = parseFloat((availableCredits - cost).toFixed(2));
         defaultLogger.info('Actualizando créditos', {
             userId,
@@ -54,7 +53,6 @@ async function processTokenUsage(responseOpenAI, availableCredits, userId, numbe
             file: 'openai/index.js'
         });
         await postWhatsappCredit(String(newCredits));
-    }
 
     return cost;
 }

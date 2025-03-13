@@ -9,7 +9,8 @@ const {
     putWhatsappOrderConfirmation,
     getWhatsappWhitelist,
     promptUpdateProductWhatsapp ,
-    promptGetWhatsapp
+    promptGetWhatsapp,
+    getWhatsappConversation
 } = require('../services/aws')
 
 const { defaultLogger } = require('../helpers/cloudWatchLogger');
@@ -36,9 +37,22 @@ const chatbot = addKeyword(EVENTS.WELCOME)
     // Primera acción: Validación inicial y procesamiento de mensajes
     .addAction(async (ctx, { state, endFlow, flowDynamic }) => {
         try {
+
             const userId = ctx.key.remoteJid
             const numberPhone = ctx.from
             const name = ctx?.pushName ?? ''
+
+            const greetings = ['hola', 'como esta', 'buenos dias', 'buenas tardes', 'buenas noches']
+            if(greetings.some(greeting => ctx.body.toLowerCase().includes(greeting))){
+                await putWhatsapp(numberPhone, name, true)
+                defaultLogger.info('Usuario activado', {
+                    userId,
+                    numberPhone,
+                    name,
+                    action: 'user_active',
+                    file: 'chatbot.js'
+                })
+            }
 
             defaultLogger.info('Iniciando procesamiento de mensaje', {
                 userId,
@@ -124,10 +138,37 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 return endFlow()
             }
             // Call the alarm processing method
-            const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, ctx.body)
+            const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, ctx.body,"user")
             if (shouldEndFlow) return endFlow()
 
             TIMEOUT_MS = Math.floor(Math.random() * (15000 - 10000 + 1) + 10000) // Tiempo de espera aleatorio entre 45-60 segundos
+
+
+            // Get current conversation history from state
+            const historyGlobalStatus = state.getMyState()?.history ?? []
+            // Check if there's no conversation history
+            if(historyGlobalStatus.length <= 0){
+                // Fetch conversation history from database
+                const historyDB = await getWhatsappConversation(numberPhone);
+                defaultLogger.info('Historial de conversación recuperado de la base de datos', {
+                    userId,
+                    numberPhone,
+                    name,
+                    historyLength: historyDB?.length || 0,
+                    action: 'history_db_retrieved',
+                    file: 'chatbot.js'
+                })
+
+                defaultLogger.info('Estado actualizado con el historial de conversación', {
+                    userId,
+                    numberPhone,
+                    name,
+                    action: 'history_state_updated',
+                    file: 'chatbot.js'
+                })
+                await state.update({ history: historyDB })
+            }
+
 
             // Configurar timeout para análisis de intención
             userTimeouts[userId] = setTimeout(async () => {
@@ -282,7 +323,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 })
 
                 // Call the alarm processing method
-                const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, response)
+                const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, response,"IA")
                 if (shouldEndFlow) return endFlow()
 
                 // Procesar orden si se detecta
@@ -367,7 +408,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
 
 
 // Process alarms through dedicated method
-const processAlarm = async (ctx, numberPhone, name, flowDynamic, question) => {
+const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,UserOrIA) => {
     const hasAlarm = await regexAlarm(question)
     defaultLogger.info('Verificación de alarma', {
         userId: ctx.key.remoteJid,
@@ -389,9 +430,11 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question) => {
             action: 'alarm_processing',
             file: 'chatbot.js'
         })
+
+        const message = UserOrIA === "user" ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo." : question
         
         await flowDynamic(alarmResponse 
-            ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo."
+            ? message
             : "Lo sentimos, pero no tenemos personal disponible en este momento."
         )
         

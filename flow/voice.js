@@ -10,7 +10,8 @@ const {
     getWhatsappWhitelist,
     putWhatsappOrderConfirmation,
     promptUpdateProductWhatsapp ,
-    promptGetWhatsapp
+    promptGetWhatsapp,
+    getWhatsappConversation
 } = require('../services/aws')
 const { setTimeout } = require('timers/promises')
 const { defaultLogger } = require('../helpers/cloudWatchLogger')
@@ -96,6 +97,32 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
                     file: 'voice.js'
                 })
                 return endFlow()
+            }
+
+
+            // Get current conversation history from state
+            const historyGlobalStatus = state.getMyState()?.history ?? []
+            // Check if there's no conversation history
+            if(historyGlobalStatus.length <= 0){
+                // Fetch conversation history from database
+                const historyDB = await getWhatsappConversation(numberPhone);
+                defaultLogger.info('Historial de conversación recuperado de la base de datos', {
+                    userId,
+                    numberPhone,
+                    name,
+                    historyLength: historyDB?.length || 0,
+                    action: 'history_db_retrieved',
+                    file: 'voice.js'
+                })
+
+                defaultLogger.info('Estado actualizado con el historial de conversación', {
+                    userId,
+                    numberPhone,
+                    name,
+                    action: 'history_state_updated',
+                    file: 'voice.js'
+                })
+                await state.update({ history: historyDB })
             }
 
             // Analizar intención del usuario
@@ -212,7 +239,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
             })
 
             // Call the alarm processing method
-            const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, transcribedText,transcribedText)
+            const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, transcribedText,transcribedText,"user")
             if (shouldEndFlow) return endFlow()
 
             // Actualizar historial de conversación
@@ -244,7 +271,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
             })
 
             // Call the alarm processing method
-            const shouldEndFlow2 = await processAlarm(ctx, numberPhone, name, flowDynamic, response,transcribedText)
+            const shouldEndFlow2 = await processAlarm(ctx, numberPhone, name, flowDynamic, response,transcribedText,"IA")
             if (shouldEndFlow2) return endFlow()
 
             // Procesar orden si se detecta
@@ -329,7 +356,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
 
 
     // Process alarms through dedicated method
-const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,message) => {
+const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,message,UserOrIA) => {
     const hasAlarm = await regexAlarm(question)
     defaultLogger.info('Verificación de alarma', {
         userId: ctx.key.remoteJid,
@@ -351,9 +378,11 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,messag
             action: 'alarm_processing',
             file: 'chatbot.js'
         })
-        
+
+        const messageFlow = UserOrIA === "user" ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo." : question
+
         await flowDynamic(alarmResponse 
-            ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo."
+            ? messageFlow
             : "Lo sentimos, pero no tenemos personal disponible en este momento."
         )
         

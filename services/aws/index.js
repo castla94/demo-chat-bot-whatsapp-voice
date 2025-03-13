@@ -59,6 +59,45 @@ const postWhatsappConversation = async (phone, message_user, message_openia) => 
   }
 };
 
+
+/**
+ * Obtiene listado de conversaciones
+ * @returns {Promise<number|null>} Objeto array con listado de conversaciones
+ */
+const getWhatsappConversation = async (number) => {
+  const endpoint = `${BASE_URL}/whatsapp-conversation`;
+  const email_bk = process.env.EMAIL_TOKEN;
+  try {
+    const response = await axios.get(endpoint, { params: { email:email_bk,number } });
+    let history = [];
+    const ItemConversation = response.data.item ? response.data.item.slice(-25) : [];
+    let counter = 0;
+     ItemConversation.forEach(item => {
+        counter++
+        if(counter <= 25){
+          history.push({
+              role: 'user',
+              content: item.message_user
+          });
+          history.push({
+            role: 'assistant',
+            content: item.message_openia
+          });
+        }
+    });
+
+    return history;
+  } catch (error) {
+    defaultLogger.error('Error consultando conversaciones', {
+      error: error.message,
+      stack: error.stack,
+      action: 'get_whatsapp_conversation_error',
+      file: 'aws/index.js'
+    });
+    return null;
+  }
+};
+
 /**
  * Obtiene los créditos disponibles
  * @returns {Promise<number|null>} Cantidad de créditos o null si hay error
@@ -397,5 +436,6 @@ module.exports = {
   postWhatsappCredit,
   postWhatsappConversation,
   getWhatsappWhitelist,
-  promptUpdateProductWhatsapp
+  promptUpdateProductWhatsapp,
+  getWhatsappConversation
 };

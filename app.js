@@ -24,7 +24,6 @@ const main = async () => {
         const adapterFlow = createFlow([
             voice,
             chatbot,
-            welcome,
             media
         ]);
         const adapterProvider = createProvider(BaileysProvider);

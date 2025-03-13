@@ -171,14 +171,14 @@ const media = addKeyword(EVENTS.MEDIA)
             }
 
             // Actualizar estado del chat
-            await putWhatsapp(numberPhone, name, false)
+            /*await putWhatsapp(numberPhone, name, false)
             defaultLogger.info('Estado del chat actualizado', {
                 userId,
                 numberPhone,
                 name,
                 action: 'chat_status_updated',
                 file: 'media.js'
-            })
+            })*/
             
             return endFlow()
 
