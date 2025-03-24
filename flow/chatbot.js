@@ -10,7 +10,8 @@ const {
     getWhatsappWhitelist,
     promptUpdateProductWhatsapp ,
     promptGetWhatsapp,
-    getWhatsappConversation
+    getWhatsappConversation,
+    postWhatsappConversation
 } = require('../services/aws')
 
 const { defaultLogger } = require('../helpers/cloudWatchLogger');
@@ -109,6 +110,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             })
 
             if (botStatus && !botStatus.status) {
+                await postWhatsappConversation(numberPhone, "", ctx.body);
                 defaultLogger.info('Bot desactivado globalmente', {
                     action: 'global_status_end_flow',
                     file: 'chatbot.js'
@@ -128,6 +130,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             })
 
             if (userStatus && !userStatus.status) {
+                await postWhatsappConversation(numberPhone, "", ctx.body);
                 defaultLogger.info('Usuario desactivado', {
                     userId,
                     numberPhone,
