@@ -13,6 +13,7 @@ require('dotenv').config();
 // ... existing code ...
 const { defaultLogger } = require('./helpers/cloudWatchLogger');
 const express = require("express");
+const { postWhatsappConversation } =  require('./services/aws');
 const app = express();
 
 
@@ -44,26 +45,46 @@ const main = async () => {
         /**
          * Enviar mensaje con metodos propios del provider del bot
          */
-        /*app.post("/send-message-bot", async (req, res) => {
+        app.post("/send-message-bot", async (req, res) => {
+
             const { phoneNumber, message } = req.body; // Extrae los parámetros del body
 
             if (!phoneNumber || !message) {
+                defaultLogger.warn("Parámetros 'phoneNumber' y 'message' son requeridos", {
+                    phoneNumber: !!phoneNumber,
+                    message: !!message
+                });
                 return res.status(400).send({ error: "Parámetros 'phoneNumber' y 'message' son requeridos" });
             }
 
             try {
+
                 // Enviar el mensaje usando el número y el mensaje desde el body
                 await adapterProvider.sendText(`${phoneNumber}@c.us`, message);
-                console.log("enviado!");
-                res.send({ data: "enviado!" });
+                
+                defaultLogger.info('Mensaje Manual Enviado', {
+                    phoneNumber,
+                    messageBody:message,
+                    timestamp: new Date().toISOString()
+                });
+
+                await postWhatsappConversation(phoneNumber, "", message);
+
+                res.send({ data: "enviado" });
             } catch (error) {
+                defaultLogger.error('Error al enviar el mensaje', {
+                    phoneNumber,
+                    error: error.message,
+                    stack: error.stack
+                });
+                
                 console.error("Error al enviar mensaje:", error);
                 res.status(500).send({ error: "Error al enviar el mensaje" });
             }
         });
-        const portsend = 3001
+        const portsend = parseInt(port) + 10000;
         app.listen(portsend, () => console.log(`http://localhost:${portsend}`));
-        */
+        
 
     } catch (error) {
         defaultLogger.error('Error al iniciar el bot', {
