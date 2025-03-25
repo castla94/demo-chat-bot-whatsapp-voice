@@ -11,7 +11,8 @@ const {
     putWhatsappOrderConfirmation,
     promptUpdateProductWhatsapp ,
     promptGetWhatsapp,
-    getWhatsappConversation
+    getWhatsappConversation,
+    postWhatsappConversation
 } = require('../services/aws')
 const { setTimeout } = require('timers/promises')
 const { defaultLogger } = require('../helpers/cloudWatchLogger')
@@ -378,6 +379,12 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,messag
             action: 'alarm_processing',
             file: 'chatbot.js'
         })
+
+        if(UserOrIA === "user"){
+            await postWhatsappConversation(numberPhone,question,"");
+        }else{
+            await postWhatsappConversation(numberPhone,"",question);
+        }
 
         const messageFlow = UserOrIA === "user" ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo." : question
 

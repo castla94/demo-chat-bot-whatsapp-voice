@@ -434,6 +434,12 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,UserOr
             file: 'chatbot.js'
         })
 
+        if(UserOrIA === "user"){
+            await postWhatsappConversation(numberPhone,question,"");
+        }else{
+            await postWhatsappConversation(numberPhone,"",question);
+        }
+
         const message = UserOrIA === "user" ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo." : question
         
         await flowDynamic(alarmResponse 
