@@ -45,14 +45,14 @@ const chatbot = addKeyword(EVENTS.WELCOME)
 
             const greetings = ['hola', 'como esta', 'buenos dias', 'buenas tardes', 'buenas noches']
             if(greetings.some(greeting => ctx.body.toLowerCase().includes(greeting))){
-                await putWhatsapp(numberPhone, name, true)
+                /*await putWhatsapp(numberPhone, name, true)
                 defaultLogger.info('Usuario activado', {
                     userId,
                     numberPhone,
                     name,
                     action: 'user_active',
                     file: 'chatbot.js'
-                })
+                })*/
             }
 
             defaultLogger.info('Iniciando procesamiento de mensaje', {

@@ -70,11 +70,11 @@ const getWhatsappConversation = async (number) => {
   try {
     const response = await axios.get(endpoint, { params: { email:email_bk,number } });
     let history = [];
-    const ItemConversation = response.data.item ? response.data.item.slice(-25) : [];
+    const ItemConversation = response.data.item ? response.data.item.slice(-10) : [];
     let counter = 0;
      ItemConversation.forEach(item => {
         counter++
-        if(counter <= 25){
+        if(counter <= 10){
           history.push({
               role: 'user',
               content: item.message_user
