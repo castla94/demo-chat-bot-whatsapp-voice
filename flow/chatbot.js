@@ -1,14 +1,14 @@
 const { addKeyword, EVENTS } = require('@bot-whatsapp/bot')
 const { run, runDetermine, runUpdatePromptServicesProduct } = require('../services/openai')
-const { 
+const {
     getWhatsapp,
-    putWhatsapp, 
+    putWhatsapp,
     whatsappStatus,
     regexAlarm,
     putWhatsappEmailVendor,
     putWhatsappOrderConfirmation,
     getWhatsappWhitelist,
-    promptUpdateProductWhatsapp ,
+    promptUpdateProductWhatsapp,
     promptGetWhatsapp,
     getWhatsappConversation,
     postWhatsappConversation
@@ -42,18 +42,6 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             const userId = ctx.key.remoteJid
             const numberPhone = ctx.from
             const name = ctx?.pushName ?? ''
-
-            const greetings = ['hola', 'como esta', 'buenos dias', 'buenas tardes', 'buenas noches']
-            if(greetings.some(greeting => ctx.body.toLowerCase().includes(greeting))){
-                /*await putWhatsapp(numberPhone, name, true)
-                defaultLogger.info('Usuario activado', {
-                    userId,
-                    numberPhone,
-                    name,
-                    action: 'user_active',
-                    file: 'chatbot.js'
-                })*/
-            }
 
             defaultLogger.info('Iniciando procesamiento de mensaje', {
                 userId,
@@ -110,7 +98,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             })
 
             if (botStatus && !botStatus.status) {
-                await postWhatsappConversation(numberPhone,ctx.body,"");
+                await postWhatsappConversation(numberPhone, ctx.body, "");
                 defaultLogger.info('Bot desactivado globalmente', {
                     action: 'global_status_end_flow',
                     file: 'chatbot.js'
@@ -130,7 +118,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             })
 
             if (userStatus && !userStatus.status) {
-                await postWhatsappConversation(numberPhone,ctx.body,"");
+                await postWhatsappConversation(numberPhone, ctx.body, "");
                 defaultLogger.info('Usuario desactivado', {
                     userId,
                     numberPhone,
@@ -141,7 +129,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 return endFlow()
             }
             // Call the alarm processing method
-            const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, ctx.body,"user")
+            const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, ctx.body, "user")
             if (shouldEndFlow) return endFlow()
 
             TIMEOUT_MS = Math.floor(Math.random() * (15000 - 10000 + 1) + 10000) // Tiempo de espera aleatorio entre 45-60 segundos
@@ -150,7 +138,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             // Get current conversation history from state
             const historyGlobalStatus = state.getMyState()?.history ?? []
             // Check if there's no conversation history
-            if(historyGlobalStatus.length <= 0){
+            if (historyGlobalStatus.length <= 0) {
                 // Fetch conversation history from database
                 const historyDB = await getWhatsappConversation(numberPhone);
                 defaultLogger.info('Historial de conversación recuperado de la base de datos', {
@@ -326,33 +314,33 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 })
 
                 // Call the alarm processing method
-                const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, response,"IA")
+                const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, response, "IA")
                 if (shouldEndFlow) return endFlow()
 
                 // Procesar orden si se detecta
                 if (response.toLowerCase().includes("datos recibidos")) {
 
                     const whatsappPrompt = await promptGetWhatsapp();
-                    if(whatsappPrompt.products_dynamic){
-                            const updatePrompt = await runUpdatePromptServicesProduct(response);
-                            defaultLogger.info('Prompt actualizado', {
-                                userId,
-                                numberPhone,
-                                name,
-                                updatePrompt,
-                                action: 'update_prompt_complete',
-                                file: 'chatbot.js'
-                            });
+                    if (whatsappPrompt.products_dynamic) {
+                        const updatePrompt = await runUpdatePromptServicesProduct(response);
+                        defaultLogger.info('Prompt actualizado', {
+                            userId,
+                            numberPhone,
+                            name,
+                            updatePrompt,
+                            action: 'update_prompt_complete',
+                            file: 'chatbot.js'
+                        });
 
-                            const responseUpdateProductWhatsapp = await promptUpdateProductWhatsapp(updatePrompt);
-                            defaultLogger.info('Respuesta de actualización de producto prompt', {
-                                userId,
-                                numberPhone,
-                                name,
-                                responseUpdateProductWhatsapp,
-                                action: 'product_update_response',
-                                file: 'chatbot.js'
-                            });
+                        const responseUpdateProductWhatsapp = await promptUpdateProductWhatsapp(updatePrompt);
+                        defaultLogger.info('Respuesta de actualización de producto prompt', {
+                            userId,
+                            numberPhone,
+                            name,
+                            responseUpdateProductWhatsapp,
+                            action: 'product_update_response',
+                            file: 'chatbot.js'
+                        });
                     }
 
                     const orderConfirmation = await putWhatsappOrderConfirmation(name, numberPhone, response, "pending_payment")
@@ -370,6 +358,21 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 // Enviar respuesta en chunks
                 const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
 
+                const greetings = ['hola', 'como esta', 'buenos dias', 'buenas tardes', 'buenas noches']
+                if (greetings.some(greeting => ctx.body.toLowerCase().includes(greeting))) {
+                    /*await putWhatsapp(numberPhone, name, true)
+                    defaultLogger.info('Usuario activado', {
+                        userId,
+                        numberPhone,
+                        name,
+                        action: 'user_active',
+                        file: 'chatbot.js'
+                    })*/
+                    // Get welcome message 
+                    const whatsappPrompt = await promptGetWhatsapp()
+                    await displayFile(whatsappPrompt,flowDynamic)
+                }
+
                 for (const chunk of chunks) {
                     await flowDynamic(chunk.replace(/^[\n]+/, '').trim())
                     await sleep(2000)
@@ -380,6 +383,14 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                     role: 'assistant',
                     content: response
                 })
+
+                // Eliminar los primeros 2 elementos
+                // Comprobar si el array tiene más de 20 elementos
+                if (newHistory.length > 20) {
+                    // Eliminar los primeros 2 elementos si tiene más de 20 elementos
+                    newHistory.splice(0, 2);
+                }
+
                 await state.update({ history: newHistory })
 
                 // Actualizar estado del usuario si es nuevo
@@ -410,8 +421,20 @@ const chatbot = addKeyword(EVENTS.WELCOME)
     })
 
 
+const displayFile = async (whatsappPrompt, flowDynamic) => {
+    const hasValidMenuUrl = whatsappPrompt.url_menu &&
+        whatsappPrompt.url_menu !== "" &&
+        whatsappPrompt.url_menu !== "NA"
+    if (hasValidMenuUrl) {
+        await flowDynamic([{
+            body: '.',
+            media: whatsappPrompt.url_menu
+        }])
+    }
+}
+
 // Process alarms through dedicated method
-const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,UserOrIA) => {
+const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserOrIA) => {
     const hasAlarm = await regexAlarm(question)
     defaultLogger.info('Verificación de alarma', {
         userId: ctx.key.remoteJid,
@@ -434,23 +457,23 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,UserOr
             file: 'chatbot.js'
         })
 
-        if(UserOrIA === "user"){
-            await postWhatsappConversation(numberPhone,question,"");
-        }else{
-            await postWhatsappConversation(numberPhone,"",question);
+        if (UserOrIA === "user") {
+            await postWhatsappConversation(numberPhone, question, "");
+        } else {
+            await postWhatsappConversation(numberPhone, "", question);
         }
 
         const message = UserOrIA === "user" ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo." : question
-        
-        await flowDynamic(alarmResponse 
+
+        await flowDynamic(alarmResponse
             ? message
             : "Lo sentimos, pero no tenemos personal disponible en este momento."
         )
-        
+
         await putWhatsapp(numberPhone, name, false)
         return true
     }
     return false
-}    
+}
 
 module.exports = { chatbot }

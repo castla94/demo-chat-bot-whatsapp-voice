@@ -326,6 +326,14 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
                 role: 'assistant',
                 content: response
             })
+
+            // Eliminar los primeros 2 elementos
+            // Comprobar si el array tiene más de 20 elementos
+            if (newHistory.length > 20) {
+                // Eliminar los primeros 2 elementos si tiene más de 20 elementos
+                newHistory.splice(0, 2);
+            }
+
             await state.update({ history: newHistory })
 
             // Actualizar estado del usuario si es nuevo
