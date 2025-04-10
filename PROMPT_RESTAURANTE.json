@@ -1,6 +1,6 @@
 {
   "email": {
-    "S": "admin@telknec.cl"
+    "S": "EMAIL"
   },
   "description": {
     "S": "Somos un restaurante dedicado a ofrecer las mejores pizzas al estilo latinoamericano. Utilizamos ingredientes frescos y de calidad para crear sabores únicos que combinan lo tradicional con un toque local. Además, contamos con complementos deliciosos, bebidas refrescantes y postres irresistibles. ¡Tu satisfacción es nuestra prioridad!"

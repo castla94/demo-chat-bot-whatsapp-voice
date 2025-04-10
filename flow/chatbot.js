@@ -43,6 +43,17 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             const numberPhone = ctx.from
             const name = ctx?.pushName ?? ''
 
+            if(hasOnlyEmoji(ctx.body)){
+                defaultLogger.info('No responder usuario envio solo Emoji', {
+                    userId,
+                    numberPhone,
+                    name,
+                    action: 'hasOnlyEmoji',
+                    file: 'chatbot.js'
+                })
+                return endFlow()
+            }
+
             defaultLogger.info('Iniciando procesamiento de mensaje', {
                 userId,
                 numberPhone,
@@ -432,6 +443,30 @@ const displayFile = async (whatsappPrompt, flowDynamic) => {
         }])
     }
 }
+
+function hasOnlyEmoji(str) {
+    // Eliminar espacios por si el usuario pone espacios antes o después
+    const texto = str.trim();
+  
+    // Verifica que la longitud del string en puntos de código sea 1
+    const codePoints = [...texto];
+    if (codePoints.length !== 1) return false;
+  
+    // Obtener el código Unicode del único carácter
+    const code = codePoints[0].codePointAt(0);
+  
+    // Rango básico de emojis (puedes ampliarlo si necesitas más cobertura)
+    return (
+      (code >= 0x1F600 && code <= 0x1F64F) || // Emoticonos
+      (code >= 0x1F300 && code <= 0x1F5FF) || // Símbolos y pictogramas
+      (code >= 0x1F680 && code <= 0x1F6FF) || // Transporte/mapas
+      (code >= 0x1F1E6 && code <= 0x1F1FF) || // Banderas
+      (code >= 0x2600 && code <= 0x26FF) ||   // Símbolos diversos
+      (code >= 0x2700 && code <= 0x27BF) ||   // Otros símbolos
+      (code >= 0x1F900 && code <= 0x1F9FF) || // Emoji adicionales
+      (code >= 0x1FA70 && code <= 0x1FAFF)    // Emoji nuevos
+    );
+  }
 
 // Process alarms through dedicated method
 const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserOrIA) => {
