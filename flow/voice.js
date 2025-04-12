@@ -126,18 +126,6 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
                 await state.update({ history: historyDB })
             }
 
-            // Analizar intención del usuario
-            const history = state.getMyState()?.history ?? []
-            const intention = await runDetermine(history, numberPhone)
-            defaultLogger.info('Intención detectada', {
-                userId,
-                numberPhone,
-                name,
-                intention: intention.toLowerCase(),
-                history,
-                action: 'intention_detected',
-                file: 'voice.js'
-            })
 
         } catch (error) {
             defaultLogger.error('Error en primera acción de voz', {

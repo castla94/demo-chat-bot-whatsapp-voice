@@ -172,29 +172,6 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             }
 
 
-            // Configurar timeout para análisis de intención
-            userTimeouts[userId] = setTimeout(async () => {
-                const history = state.getMyState()?.history ?? []
-                defaultLogger.info('Iniciando análisis de intención', {
-                    userId,
-                    numberPhone,
-                    name,
-                    history,
-                    action: 'intention_analysis_start',
-                    file: 'chatbot.js'
-                })
-
-                const intention = await runDetermine(history, numberPhone)
-                defaultLogger.info('Intención detectada', {
-                    userId,
-                    numberPhone,
-                    name,
-                    intention: intention.toLowerCase(),
-                    history,
-                    action: 'intention_detected',
-                    file: 'chatbot.js'
-                })
-            }, TIMEOUT_MS)
 
         } catch (error) {
             defaultLogger.error('Error en primera acción chatbot flujo', {
