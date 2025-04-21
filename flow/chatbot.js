@@ -68,6 +68,17 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             if (!userBuffers[userId]) {
                 userBuffers[userId] = []
             }
+            // Check if message already exists in buffer to avoid duplicates
+            if (userBuffers[userId].indexOf(ctx.body) !== -1) {
+                defaultLogger.info('Mensaje duplicado, ignorando...', {
+                    userId,
+                    numberPhone,
+                    name,
+                    action: 'duplicate_message',
+                    file: 'chatbot.js'
+                })
+                return endFlow()
+            }
             userBuffers[userId].push(ctx.body)
 
             // Reiniciar timeout si existe
