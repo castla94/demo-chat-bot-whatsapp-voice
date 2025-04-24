@@ -98,6 +98,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             })
 
             if (isWhitelisted) {
+                userBuffers[userId] = [] // Limpiar buffer
                 defaultLogger.info('Usuario en whitelist, finalizando flujo', {
                     userId,
                     numberPhone,
@@ -120,6 +121,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             })
 
             if (botStatus && !botStatus.status) {
+                userBuffers[userId] = [] // Limpiar buffer
                 await postWhatsappConversation(numberPhone, ctx.body, "");
                 defaultLogger.info('Bot desactivado globalmente', {
                     action: 'global_status_end_flow',
@@ -140,6 +142,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             })
 
             if (userStatus && !userStatus.status) {
+                userBuffers[userId] = [] // Limpiar buffer
                 await postWhatsappConversation(numberPhone, ctx.body, "");
                 defaultLogger.info('Usuario desactivado', {
                     userId,
@@ -229,6 +232,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             })
 
             if (isWhitelisted) {
+                userBuffers[userId] = [] // Limpiar buffer
                 defaultLogger.info('Usuario en whitelist, finalizando flujo', {
                     userId,
                     numberPhone,
@@ -251,6 +255,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             })
 
             if (botStatus && !botStatus.status) {
+                userBuffers[userId] = [] // Limpiar buffer
                 defaultLogger.info('Bot desactivado globalmente', {
                     action: 'global_status_end_flow',
                     file: 'chatbot.js'
@@ -270,6 +275,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             })
 
             if (userStatus && !userStatus.status) {
+                userBuffers[userId] = [] // Limpiar buffer
                 defaultLogger.info('Usuario desactivado', {
                     userId,
                     numberPhone,
@@ -470,6 +476,13 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserO
     })
 
     if (hasAlarm) {
+
+        if (UserOrIA === "user") {
+            await postWhatsappConversation(numberPhone, question, "");
+        } else {
+            await postWhatsappConversation(numberPhone, "", question);
+        }
+        
         const alarmResponse = await putWhatsappEmailVendor(numberPhone, name, ctx.body)
         defaultLogger.info('Procesamiento de alarma', {
             numberPhone,
@@ -479,12 +492,6 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserO
             action: 'alarm_processing',
             file: 'chatbot.js'
         })
-
-        if (UserOrIA === "user") {
-            await postWhatsappConversation(numberPhone, question, "");
-        } else {
-            await postWhatsappConversation(numberPhone, "", question);
-        }
 
         const message = UserOrIA === "user" ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo." : question
 

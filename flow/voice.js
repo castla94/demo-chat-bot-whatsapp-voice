@@ -366,6 +366,13 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,messag
     })
 
     if (hasAlarm) {
+
+        if(UserOrIA === "user"){
+            await postWhatsappConversation(numberPhone,question,"");
+        }else{
+            await postWhatsappConversation(numberPhone,"",question);
+        }
+
         const alarmResponse = await putWhatsappEmailVendor(numberPhone, name, message)
         defaultLogger.info('Procesamiento de alarma', {
             numberPhone,
@@ -375,12 +382,6 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,messag
             action: 'alarm_processing',
             file: 'chatbot.js'
         })
-
-        if(UserOrIA === "user"){
-            await postWhatsappConversation(numberPhone,question,"");
-        }else{
-            await postWhatsappConversation(numberPhone,"",question);
-        }
 
         const messageFlow = UserOrIA === "user" ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo." : question
 
