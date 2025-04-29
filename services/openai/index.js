@@ -96,11 +96,13 @@ const runAnalyzeImage = async (base64Image,phone,name) => {
                     content: [
                         {
                             type: "text",
-                            text: "Que es esta imagen?, extraer informacion, categorizala ," +
-                                "identificarla y organizarla en una estructura" +
-                                "La descripcion debe ser breve y no superar los 300 caracteres" +
-                                "Retorna el resultado en formato texto con negritas y saltos de lineas compatibles" +
-                                " para Correo Electronico"
+                            text: "Eres un experto analizador de imágenes. Por favor analiza esta imagen y proporciona:" +
+                                "1. Descripción breve de lo que muestra la imagen" +
+                                "2. Categoría principal o tipo de imagen" +
+                                "3. Elementos u objetos clave identificados" +
+                                "4. Contexto o escenario relevante" +
+                                "Formatea la respuesta de manera clara y estructurada usando texto en negrita y saltos de línea. " +
+                                "Mantén la respuesta total en menos de 500 caracteres y asegúrate de que sea compatible con correo electrónico."
                         },
                         {
                             type: "image_url",
@@ -112,7 +114,7 @@ const runAnalyzeImage = async (base64Image,phone,name) => {
             store: true,
         });
 
-        await processTokenUsage(response, availableCredits, userId, numberPhone, name);
+        //await processTokenUsage(response, availableCredits, userId, numberPhone, name);
 
         return response.choices[0].message.content;
     } catch (error) {

@@ -160,8 +160,8 @@ const media = addKeyword(EVENTS.MEDIA)
             // Enviar respuesta al usuario según disponibilidad
             if (responseAlarm) {
                 await flowDynamic([
-                    "¡Listo! Recibido.",
-                    "Dame un momento para revisarlo"
+                    "¡Recibido! Lo revisaré con atención.",
+                    "Te responderé en breve. ¡Gracias por tu paciencia! 🙂"
                 ])
             } else {
                 await flowDynamic([
