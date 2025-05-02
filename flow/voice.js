@@ -227,6 +227,11 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
                 file: 'voice.js'
             })
 
+            if(transcribedText === "ERROR"){
+                await flowDynamic("Disculpa, no entendí tu mensaje. Por favor, puedes enviarlo de nuevo.")
+                return endFlow()
+            }
+
             // Call the alarm processing method
             const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, transcribedText,transcribedText,"user")
             if (shouldEndFlow) return endFlow()
