@@ -1,4 +1,5 @@
 const { addKeyword, EVENTS } = require('@bot-whatsapp/bot')
+const { run } = require('../services/openai')
 const { 
     putWhatsapp, 
     putWhatsappEmailVendor,
@@ -11,12 +12,21 @@ const fs = require("fs");
 const { defaultLogger } = require('../helpers/cloudWatchLogger');
 const { processImage } = require("../services/image")
 
+
+/**
+ * Función auxiliar para pausar la ejecución
+ * @param {number} ms - Milisegundos a esperar
+ * @returns {Promise} Promesa que se resuelve después del tiempo especificado
+ */
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
+
+
 /**
  * Flow para manejar eventos de medios (imágenes) enviados por el usuario
  * Procesa comprobantes de pago y notifica al vendedor
  */
 const media = addKeyword(EVENTS.MEDIA)
-    .addAction(async (ctx, { flowDynamic, endFlow }) => {
+    .addAction(async (ctx, { flowDynamic, endFlow, state }) => {
         const userId = ctx.key.remoteJid
         const numberPhone = ctx.from
         const name = ctx?.pushName ?? ''
@@ -97,6 +107,8 @@ const media = addKeyword(EVENTS.MEDIA)
                 return endFlow()
             }
 
+            await flowDynamic("Dame un momento para revisar.")
+
             // Procesar y guardar la imagen recibida
             const buffer = await downloadMediaMessage(ctx, "buffer")
             const fileName = `imagen${numberPhone}-${Date.now()}.jpg`
@@ -112,8 +124,8 @@ const media = addKeyword(EVENTS.MEDIA)
                 file: 'media.js'
             })
 
-            const responseImage = await processImage(pathImg,numberPhone,name)
-
+            const responseImage = await processImage(pathImg,numberPhone,name)  
+            
             if (!responseImage && !userStatus.status) {
                 defaultLogger.info('Usuario desactivado', {
                     userId,
@@ -124,6 +136,58 @@ const media = addKeyword(EVENTS.MEDIA)
                 })
                 return endFlow()
             }
+            
+            defaultLogger.info('Respuesta del modelo obtenida Imagen', {
+                userId,
+                numberPhone,
+                name,
+                modelResponse: responseImage.text,
+                action: 'model_response',
+                file: 'media.js'
+            })
+
+            const newHistory = (state.getMyState()?.history ?? [])
+
+            const question =  `Te envio la imagen con la informacion solicitada: *${responseImage.text}*\n\n. IMPORTANTE : confirmo que la informacion es correcta.`
+
+            newHistory.push({
+                role: 'user',
+                content: question
+            })
+
+            // Obtener respuesta del modelo
+            const response = await run(name, newHistory, question, numberPhone,responseImage.img)
+            defaultLogger.info('Respuesta del modelo obtenida Texto Imagen', {
+                userId,
+                numberPhone,
+                name,
+                modelResponse: response,
+                action: 'model_response',
+                file: 'media.js'
+            })
+
+            // Enviar respuesta en chunks
+            const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
+
+            for (const chunk of chunks) {
+                await flowDynamic(chunk.replace(/^[\n]+/, '').trim())
+                await sleep(2000)
+            }
+
+            // Actualizar historial
+            newHistory.push({
+                role: 'assistant',
+                content: response
+            })
+
+            // Eliminar los primeros 2 elementos
+            // Comprobar si el array tiene más de 20 elementos
+            if (newHistory.length > 20) {
+                // Eliminar los primeros 2 elementos si tiene más de 20 elementos
+                newHistory.splice(0, 2);
+            }
+
+            await state.update({ history: newHistory })
 
             responseImage.text = responseImage.text.replace(/\n/g, "<br>").replace(/\*\*(.*?)\*\*/g, "<b>$1</b>")
 
@@ -156,29 +220,6 @@ const media = addKeyword(EVENTS.MEDIA)
                     });
                 }
             });
-
-            // Enviar respuesta al usuario según disponibilidad
-            if (responseAlarm) {
-                await flowDynamic([
-                    "¡Recibido! Lo revisaré con atención.",
-                    "Te responderé en breve. ¡Gracias por tu paciencia! 🙂"
-                ])
-            } else {
-                await flowDynamic([
-                "Lo sentimos, en este momento nuestro equipo no está disponible para atenderte.",
-                "Por favor, intenta más tarde y te responderemos lo antes posible. ¡Gracias por tu comprensión!"
-                ])
-            }
-
-            // Actualizar estado del chat
-            /*await putWhatsapp(numberPhone, name, false)
-            defaultLogger.info('Estado del chat actualizado', {
-                userId,
-                numberPhone,
-                name,
-                action: 'chat_status_updated',
-                file: 'media.js'
-            })*/
             
             return endFlow()
 

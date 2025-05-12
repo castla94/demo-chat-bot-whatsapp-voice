@@ -36,7 +36,7 @@ const postWhatsappCredit = async (credit) => {
  * @param {string} message_openia - Respuesta del sistema
  * @returns {Promise<Object|null>} Respuesta de la API o null si hay error
  */
-const postWhatsappConversation = async (phone, message_user, message_openia) => {
+const postWhatsappConversation = async (phone, message_user, message_openia,imageBase64 = "") => {
   const email_bk = process.env.EMAIL_TOKEN;
   const endpoint = `${BASE_URL}/whatsapp-conversation`;
 
@@ -44,7 +44,8 @@ const postWhatsappConversation = async (phone, message_user, message_openia) => 
     const response = await axios.post(`${endpoint}?email_bk=${email_bk}`, {
       phone,
       message_user,
-      message_openia
+      message_openia,
+      imageBase64
     });
     return response.data;
   } catch (error) {

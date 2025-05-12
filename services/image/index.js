@@ -24,10 +24,7 @@ async function processImage(imagePath,phone,name) {
         const respuesta = await runAnalyzeImage(base64Image,phone,name)
 
         if(respuesta === "¡Hola! 👋 Gracias por contactarnos. En este momento no podemos atender tu consulta, pero no te preocupes, nos pondremos en contacto contigo lo antes posible. 🙏\nSi necesitas ayuda urgente, puedes dejar un mensaje con los detalles de tu consulta, y te responderemos tan pronto como podamos.\n¡Gracias por tu paciencia! 😊"){
-            return {
-                text:"",
-                img:""
-            }
+            throw new Error("No creditos insuficientes");
         }
 
         defaultLogger.info('Imagen procesada exitosamente', {
@@ -49,10 +46,7 @@ async function processImage(imagePath,phone,name) {
             action: 'process_image_error',
             file: 'image/index.js'
         });
-        return {
-            text:"",
-            img:""
-        }
+        throw error;
     }
 }
 

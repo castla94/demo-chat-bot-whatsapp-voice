@@ -96,13 +96,7 @@ const runAnalyzeImage = async (base64Image,phone,name) => {
                     content: [
                         {
                             type: "text",
-                            text: "Eres un experto analizador de imágenes. Por favor analiza esta imagen y proporciona:" +
-                                "1. Descripción breve de lo que muestra la imagen" +
-                                "2. Categoría principal o tipo de imagen" +
-                                "3. Elementos u objetos clave identificados" +
-                                "4. Contexto o escenario relevante" +
-                                "Formatea la respuesta de manera clara y estructurada usando texto en negrita y saltos de línea. " +
-                                "Mantén la respuesta total en menos de 500 caracteres y asegúrate de que sea compatible con correo electrónico."
+                            text: "Envio, imagen con informacion solicitada, analiza y responde en formato texto."
                         },
                         {
                             type: "image_url",
@@ -128,7 +122,7 @@ const runAnalyzeImage = async (base64Image,phone,name) => {
     }
 };
 
-const run = async (name, history, question, phone) => {
+const run = async (name, history, question, phone,imageBase64 = "") => {
     const userId = phone; // Usando el teléfono como userId por consistencia
     const numberPhone = phone;
 
@@ -169,7 +163,7 @@ const run = async (name, history, question, phone) => {
             presence_penalty: 0,
         });
 
-        await postWhatsappConversation(phone, question, response.choices[0].message.content);
+        await postWhatsappConversation(phone, question, response.choices[0].message.content,imageBase64);
         await processTokenUsage(response, availableCredits, userId, numberPhone, name);
 
         return response.choices[0].message.content.replace(/\*\*/g, '*');
