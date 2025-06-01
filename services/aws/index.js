@@ -11,7 +11,7 @@ const BASE_URL = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV';
  * @returns {Promise<Object|null>} Respuesta de la API o null si hay error
  */
 const postWhatsappCredit = async (credit) => {
-  const email_bk = process.env.EMAIL_TOKEN;
+  const email_bk = encodeURIComponent(process.env.EMAIL_TOKEN);
   const endpoint = `${BASE_URL}/whatsapp-setting/credits`;
 
   try {
@@ -37,7 +37,7 @@ const postWhatsappCredit = async (credit) => {
  * @returns {Promise<Object|null>} Respuesta de la API o null si hay error
  */
 const postWhatsappConversation = async (phone, message_user, message_openia,imageBase64 = "") => {
-  const email_bk = process.env.EMAIL_TOKEN;
+  const email_bk = encodeURIComponent(process.env.EMAIL_TOKEN);
   const endpoint = `${BASE_URL}/whatsapp-conversation`;
 
   try {
@@ -67,7 +67,7 @@ const postWhatsappConversation = async (phone, message_user, message_openia,imag
  */
 const getWhatsappConversation = async (number) => {
   const endpoint = `${BASE_URL}/whatsapp-conversation`;
-  const email_bk = process.env.EMAIL_TOKEN;
+  const email_bk = encodeURIComponent(process.env.EMAIL_TOKEN);
   try {
     const response = await axios.get(endpoint, { params: { email:email_bk,number } });
     let history = [];
@@ -105,7 +105,7 @@ const getWhatsappConversation = async (number) => {
  */
 const getWhatsappCredit = async () => {
   const endpoint = `${BASE_URL}/whatsapp-setting/credits`;
-  const email_bk = process.env.EMAIL_TOKEN;
+  const email_bk = encodeURIComponent(process.env.EMAIL_TOKEN);
 
   try {
     const response = await axios.get(endpoint, { params: { email_bk } });
@@ -129,7 +129,7 @@ const getWhatsappCredit = async () => {
  */
 const getWhatsappPlanPremiun = async () => {
   const endpoint = `${BASE_URL}/whatsapp-setting/credits`;
-  const email_bk = process.env.EMAIL_TOKEN;
+  const email_bk = encodeURIComponent(process.env.EMAIL_TOKEN);
 
   try {
     const response = await axios.get(endpoint, { params: { email_bk } });
@@ -154,7 +154,7 @@ const getWhatsappPlanPremiun = async () => {
  */
 const getWhatsappWhitelist = async (phone) => {
   const endpoint = `${BASE_URL}/whatsapp-sessions-whitelist`;
-  const email_bk = process.env.EMAIL_TOKEN;
+  const email_bk = encodeURIComponent(process.env.EMAIL_TOKEN);
 
   try {
     const response = await axios.get(endpoint, { params: { email_bk } });
@@ -179,7 +179,7 @@ const getWhatsappWhitelist = async (phone) => {
  */
 const getWhatsapp = async (number) => {
   const endpoint = `${BASE_URL}/whatsapp`;
-  const email = process.env.EMAIL_TOKEN;
+  const email = encodeURIComponent(process.env.EMAIL_TOKEN);
 
   try {
     const response = await axios.get(endpoint, { params: { number, email } });
