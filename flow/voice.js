@@ -12,10 +12,50 @@ const {
     promptUpdateProductWhatsapp ,
     promptGetWhatsapp,
     getWhatsappConversation,
-    postWhatsappConversation
+    postWhatsappConversation,
+    getWhatsappPlanPremiun
 } = require('../services/aws')
 const { setTimeout } = require('timers/promises')
 const { defaultLogger } = require('../helpers/cloudWatchLogger')
+
+
+// Function to check premium plan status
+const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
+    const isPremiun = await getWhatsappPlanPremiun()
+    defaultLogger.info('Verificación de plan', {
+        userId,
+        numberPhone,
+        name,
+        action: 'plan_verification',
+        file: 'voice.js'
+    })
+
+    if (isPremiun === null) {
+        defaultLogger.info('No tiene plan pro, finalizando flujo', {
+            userId,
+            numberPhone,
+            name,
+            action: 'without_plan',
+            file: 'voice.js'
+        })
+        await flowDynamic("Lo siento, no puedo procesar notas de voz en este momento. Por favor, escribe tu consulta en un mensaje de texto.")
+        return true
+    }
+
+    if (isPremiun && (isPremiun.plan !== "Pro" || isPremiun.plan !== "Enterprise")) {
+        defaultLogger.info('Debe mejorar plan, finalizando flujo', {
+            userId,
+            numberPhone,
+            name,
+            action: 'without_plan_pro',
+            file: 'voice.js'
+        })
+        await flowDynamic("Lo siento, no puedo procesar notas de voz en este momento. Por favor, escribe tu consulta en un mensaje de texto.")
+        return true
+    }
+
+    return false
+}
 
 /**
  * Flujo para manejar notas de voz
@@ -23,7 +63,7 @@ const { defaultLogger } = require('../helpers/cloudWatchLogger')
  */
 const voice = addKeyword(EVENTS.VOICE_NOTE)
     // Primera acción: Validación inicial y análisis de intención
-    .addAction(async (ctx, { state, endFlow }) => {
+    .addAction(async (ctx, { state, endFlow,flowDynamic }) => {
         const userId = ctx.key.remoteJid
         const numberPhone = ctx.from
         const name = ctx?.pushName ?? ''
@@ -36,6 +76,10 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
                 action: 'voice_note_received',
                 file: 'voice.js'
             })
+
+            // Check premium plan status
+            const shouldEndFlow = await checkPremiumPlan(userId, numberPhone, name, flowDynamic)
+            if (shouldEndFlow) return endFlow()
 
             // Validar si el usuario está en lista blanca
             const isWhitelisted = await getWhatsappWhitelist(numberPhone)

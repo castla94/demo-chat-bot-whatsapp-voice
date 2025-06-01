@@ -121,6 +121,32 @@ const getWhatsappCredit = async () => {
   }
 };
 
+
+
+/**
+ * Obtiene los créditos disponibles
+ * @returns {Promise<number|null>} Cantidad de créditos o null si hay error
+ */
+const getWhatsappPlanPremiun = async () => {
+  const endpoint = `${BASE_URL}/whatsapp-setting/credits`;
+  const email_bk = process.env.EMAIL_TOKEN;
+
+  try {
+    const response = await axios.get(endpoint, { params: { email_bk } });
+    return {isPremiun:response.data.item.premiun,plan:response.data.item.plan};
+  } catch (error) {
+    defaultLogger.error('Error consultando plan', {
+      error: error.message,
+      stack: error.stack,
+      action: 'get_whatsapp_plan_premiun_error',
+      file: 'aws/index.js'
+    });
+    return null;
+  }
+};
+
+
+
 /**
  * Verifica si un número de teléfono está en la lista blanca
  * @param {string} phone - Número a verificar
@@ -438,5 +464,6 @@ module.exports = {
   postWhatsappConversation,
   getWhatsappWhitelist,
   promptUpdateProductWhatsapp,
-  getWhatsappConversation
+  getWhatsappConversation,
+  getWhatsappPlanPremiun
 };

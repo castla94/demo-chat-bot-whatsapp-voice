@@ -32,7 +32,7 @@ async function processTokenUsage(responseOpenAI, availableCredits, userId, numbe
         file: 'openai/index.js'
     });
 
-    const cost = calculateCredits(prompt_tokens, completion_tokens);
+    const cost = 1//calculateCredits(prompt_tokens, completion_tokens);
     
     defaultLogger.info('Costo de operación calculado', {
         userId,

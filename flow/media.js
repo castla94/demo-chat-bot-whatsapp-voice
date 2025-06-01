@@ -1,11 +1,14 @@
 const { addKeyword, EVENTS } = require('@bot-whatsapp/bot')
 const { run } = require('../services/openai')
 const { 
-    putWhatsapp, 
+    getWhatsappConversation, 
     putWhatsappEmailVendor,
     getWhatsapp,
     whatsappStatus,
-    getWhatsappWhitelist 
+    getWhatsappWhitelist,
+    getWhatsappPlanPremiun,
+    putWhatsapp,
+    regexAlarm
 } = require('../services/aws');
 const { downloadMediaMessage } = require("@adiwajshing/baileys")
 const fs = require("fs");
@@ -20,6 +23,73 @@ const { processImage } = require("../services/image")
  */
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
+
+// Function to check premium plan status
+const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
+    const isPremiun = await getWhatsappPlanPremiun()
+    defaultLogger.info('Verificación de plan', {
+        userId,
+        numberPhone,
+        name,
+        action: 'plan_verification',
+        file: 'voice.js'
+    })
+
+    if (isPremiun === null) {
+        defaultLogger.info('No tiene plan pro, finalizando flujo', {
+            userId,
+            numberPhone,
+            name,
+            action: 'without_plan',
+            file: 'media.js'
+        })
+        await flowDynamic("Lo siento, no puedo procesar tu imagen. Por favor, envíame por texto lo que necesitas consultar.")
+        return true
+    }
+
+    if (isPremiun && (isPremiun.plan !== "Pro" || isPremiun.plan !== "Enterprise")) {
+        defaultLogger.info('Debe mejorar plan, finalizando flujo', {
+            userId,
+            numberPhone,
+            name,
+            action: 'without_plan_pro',
+            file: 'media.js'
+        })
+        await flowDynamic("Lo siento, no puedo procesar tu imagen. Por favor, envíame por texto lo que necesitas consultar.")
+        return true
+    }
+
+    return false
+}
+
+// Process alarms through dedicated method
+const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserOrIA) => {
+    const hasAlarm = await regexAlarm(question)
+    defaultLogger.info('Verificación de alarma', {
+        userId: ctx.key.remoteJid,
+        numberPhone,
+        name,
+        messageBody: question,
+        hasAlarm,
+        action: 'alarm_check',
+        file: 'media.js'
+    })
+
+    if (hasAlarm) {
+        defaultLogger.info('Alarma encontrada, finalizando flujo', {
+            userId: ctx.key.remoteJid,
+            numberPhone,
+            name,
+            hasAlarm,
+            messageBody: question,
+            action: 'alarm_found',
+            file:'media.js'
+        })
+        await putWhatsapp(numberPhone, name, false)
+        return true
+    }
+    return false
+}
 
 /**
  * Flow para manejar eventos de medios (imágenes) enviados por el usuario
@@ -40,6 +110,10 @@ const media = addKeyword(EVENTS.MEDIA)
                 timestamp: new Date().toISOString(),
                 file: 'media.js'
             })
+
+            // Check premium plan status
+            const shouldEndFlow = await checkPremiumPlan(userId, numberPhone, name, flowDynamic)
+            if (shouldEndFlow) return endFlow()
 
             // Validar si el usuario está en lista blanca
             const isWhitelisted = await getWhatsappWhitelist(numberPhone)
@@ -145,6 +219,30 @@ const media = addKeyword(EVENTS.MEDIA)
                 action: 'model_response',
                 file: 'media.js'
             })
+               // Get current conversation history from state
+               const historyGlobalStatus = state.getMyState()?.history ?? []
+               // Check if there's no conversation history
+               if (historyGlobalStatus.length <= 0) {
+                   // Fetch conversation history from database
+                   const historyDB = await getWhatsappConversation(numberPhone);
+                   defaultLogger.info('Historial de conversación recuperado de la base de datos', {
+                       userId,
+                       numberPhone,
+                       name,
+                       historyLength: historyDB?.length || 0,
+                       action: 'history_db_retrieved',
+                       file: 'media.js'
+                   })
+   
+                   defaultLogger.info('Estado actualizado con el historial de conversación', {
+                       userId,
+                       numberPhone,
+                       name,
+                       action: 'history_state_updated',
+                       file: 'media.js'
+                   })
+                   await state.update({ history: historyDB })
+               }
 
             const newHistory = (state.getMyState()?.history ?? [])
 
@@ -207,6 +305,10 @@ const media = addKeyword(EVENTS.MEDIA)
                 action: 'vendor_notification_sent',
                 file: 'media.js'
             })
+
+            // Call the alarm processing method
+            const shouldEndFlowAlarm = await processAlarm(ctx, numberPhone, name, flowDynamic, response, "IA")
+            if (shouldEndFlowAlarm) return endFlow()
 
             fs.unlink(pathImg, (error) => {
                 if (error) {

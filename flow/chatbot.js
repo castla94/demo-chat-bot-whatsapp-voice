@@ -17,7 +17,7 @@ const {
 const { defaultLogger } = require('../helpers/cloudWatchLogger');
 
 // Constantes de configuración
-let TIMEOUT_MS = 10000 // Tiempo de espera aleatorio entre 45-60 segundos
+let TIMEOUT_MS = 45000 // Tiempo de espera aleatorio entre 45-60 segundos
 
 // Almacenamiento en memoria para gestionar mensajes de usuarios
 const userBuffers = {} // Buffer de mensajes por usuario
@@ -157,8 +157,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, ctx.body, "user")
             if (shouldEndFlow) return endFlow()
 
-            TIMEOUT_MS = Math.floor(Math.random() * (15000 - 10000 + 1) + 10000) // Tiempo de espera aleatorio entre 45-60 segundos
-
+            TIMEOUT_MS = Math.floor(Math.random() * (45000 - 30000 + 1) + 30000) // Tiempo de espera aleatorio entre 30-45 segundos
 
             // Get current conversation history from state
             const historyGlobalStatus = state.getMyState()?.history ?? []
@@ -317,6 +316,18 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                     action: 'model_response',
                     file: 'chatbot.js'
                 })
+
+                // Check if message already exists in buffer to avoid duplicates
+                if (newHistory.some(msg => msg.role === 'assistant' && msg.content === response)) {
+                    defaultLogger.info('Mensaje duplicado OpenIA, ignorando...', {
+                        userId,
+                        numberPhone,
+                        name,
+                        action: 'duplicate_message_openia',
+                        file: 'chatbot.js'
+                    })
+                    return endFlow()
+                }
 
                 // Call the alarm processing method
                 const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, response, "IA")
