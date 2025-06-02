@@ -77,10 +77,6 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
                 file: 'voice.js'
             })
 
-            // Check premium plan status
-            const shouldEndFlow = await checkPremiumPlan(userId, numberPhone, name, flowDynamic)
-            if (shouldEndFlow) return endFlow()
-
             // Validar si el usuario está en lista blanca
             const isWhitelisted = await getWhatsappWhitelist(numberPhone)
             defaultLogger.info('Verificación de whitelist', {
@@ -144,6 +140,9 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
                 return endFlow()
             }
 
+            // Check premium plan status
+            const shouldEndFlow = await checkPremiumPlan(userId, numberPhone, name, flowDynamic)
+            if (shouldEndFlow) return endFlow()
 
             // Get current conversation history from state
             const historyGlobalStatus = state.getMyState()?.history ?? []

@@ -111,10 +111,6 @@ const media = addKeyword(EVENTS.MEDIA)
                 file: 'media.js'
             })
 
-            // Check premium plan status
-            const shouldEndFlow = await checkPremiumPlan(userId, numberPhone, name, flowDynamic)
-            if (shouldEndFlow) return endFlow()
-
             // Validar si el usuario está en lista blanca
             const isWhitelisted = await getWhatsappWhitelist(numberPhone)
             defaultLogger.info('Verificación de whitelist', {
@@ -181,6 +177,11 @@ const media = addKeyword(EVENTS.MEDIA)
                 return endFlow()
             }
 
+
+            // Check premium plan status
+            const shouldEndFlow = await checkPremiumPlan(userId, numberPhone, name, flowDynamic)
+            if (shouldEndFlow) return endFlow()
+
             await flowDynamic("Dame un momento para revisar.")
 
             // Procesar y guardar la imagen recibida
@@ -246,7 +247,8 @@ const media = addKeyword(EVENTS.MEDIA)
 
             const newHistory = (state.getMyState()?.history ?? [])
 
-            const question =  `Te envio la imagen con la informacion solicitada: *${responseImage.text}*\n\n. IMPORTANTE : confirmo que la informacion es correcta.`
+            const question =  `Te envio la imagen con la informacion solicitada: *${responseImage.text}*\n\n. 
+            IMPORTANTE : confirmo que la informacion es correcta.`
 
             newHistory.push({
                 role: 'user',
