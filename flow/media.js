@@ -47,7 +47,7 @@ const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
         return true
     }
 
-    if (isPremiun && (isPremiun.plan !== "Pro" || isPremiun.plan !== "Enterprise")) {
+    if (isPremiun && (isPremiun.plan !== "Pro" && isPremiun.plan !== "Enterprise")) {
         defaultLogger.info('Debe mejorar plan, finalizando flujo', {
             userId,
             numberPhone,

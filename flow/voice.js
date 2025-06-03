@@ -18,7 +18,7 @@ const {
 const { setTimeout } = require('timers/promises')
 const { defaultLogger } = require('../helpers/cloudWatchLogger')
 
-
+ 
 // Function to check premium plan status
 const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
     const isPremiun = await getWhatsappPlanPremiun()
@@ -41,8 +41,8 @@ const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
         await flowDynamic("Lo siento, no puedo procesar notas de voz en este momento. Por favor, escribe tu consulta en un mensaje de texto.")
         return true
     }
-
-    if (isPremiun && (isPremiun.plan !== "Pro" || isPremiun.plan !== "Enterprise")) {
+    console.log("isPremiun",isPremiun)
+    if (isPremiun && (isPremiun.plan !== "Pro" && isPremiun.plan !== "Enterprise")) {
         defaultLogger.info('Debe mejorar plan, finalizando flujo', {
             userId,
             numberPhone,
