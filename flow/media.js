@@ -265,9 +265,10 @@ const media = addKeyword(EVENTS.MEDIA)
                 action: 'model_response',
                 file: 'media.js'
             })
-
+            
             // Enviar respuesta en chunks
-            const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
+            //const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
+            const chunks = response.split(/:\n\n|\n\n/)
 
             for (const chunk of chunks) {
                 await flowDynamic(chunk.replace(/^[\n]+/, '').trim())

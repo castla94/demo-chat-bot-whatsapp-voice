@@ -348,9 +348,10 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
                     file: 'voice.js'
                 })
             }
-
+            
             // Enviar respuesta en chunks para mejor legibilidad
-            const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
+            //const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
+            const chunks = response.split(/:\n\n|\n\n/)
 
             for (const chunk of chunks) {
                 await flowDynamic(chunk.replace(/^[\n]+/, '').trim())

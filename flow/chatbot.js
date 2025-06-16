@@ -370,9 +370,10 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                         file: 'chatbot.js'
                     })
                 }
-
+                
                 // Enviar respuesta en chunks
-                const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
+                //const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
+                const chunks = response.split(/:\n\n|\n\n/)
 
                 const greetings = ['hola', 'como esta', 'buenos dias', 'buenas tardes', 'buenas noches']
                 if (greetings.some(greeting => ctx.body.toLowerCase().includes(greeting))) {
