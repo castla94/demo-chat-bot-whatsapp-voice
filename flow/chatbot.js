@@ -273,6 +273,19 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 file: 'chatbot.js'
             })
 
+            // Actualizar estado del usuario si es nuevo
+            if (!userStatus) {
+                const newUserStatus = await putWhatsapp(numberPhone, name, true)
+                defaultLogger.info('Nuevo usuario registrado', {
+                    userId,
+                    numberPhone,
+                    name,
+                    newUserStatus,
+                    action: 'new_user_registration',
+                    file: 'chatbot.js'
+                })
+            }
+
             if (userStatus && !userStatus.status) {
                 userBuffers[userId] = [] // Limpiar buffer
                 defaultLogger.info('Usuario desactivado', {
@@ -410,18 +423,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
 
                 await state.update({ history: newHistory })
 
-                // Actualizar estado del usuario si es nuevo
-                if (!userStatus) {
-                    const newUserStatus = await putWhatsapp(numberPhone, name, true)
-                    defaultLogger.info('Nuevo usuario registrado', {
-                        userId,
-                        numberPhone,
-                        name,
-                        newUserStatus,
-                        action: 'new_user_registration',
-                        file: 'chatbot.js'
-                    })
-                }
+                
             }, TIMEOUT_MS)
 
         } catch (error) {

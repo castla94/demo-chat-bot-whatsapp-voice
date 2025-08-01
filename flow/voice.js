@@ -248,6 +248,19 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
                 file: 'voice.js'
             })
 
+             // Actualizar estado del usuario si es nuevo
+             if (!userStatus) {
+                const newUserStatus = await putWhatsapp(numberPhone, name, true)
+                defaultLogger.info('Nuevo usuario registrado', {
+                    userId,
+                    numberPhone,
+                    name,
+                    newUserStatus,
+                    action: 'new_user_registration',
+                    file: 'voice.js'
+                })
+            }
+
             if (userStatus && !userStatus.status) {
                 defaultLogger.info('Usuario desactivado', {
                     userId,
@@ -373,18 +386,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
 
             await state.update({ history: newHistory })
 
-            // Actualizar estado del usuario si es nuevo
-            if (!userStatus) {
-                const newUserStatus = await putWhatsapp(numberPhone, name, true)
-                defaultLogger.info('Nuevo usuario registrado', {
-                    userId,
-                    numberPhone,
-                    name,
-                    newUserStatus,
-                    action: 'new_user_registration',
-                    file: 'voice.js'
-                })
-            }
+           
 
         } catch (error) {
             defaultLogger.error('Error en segunda acción de voz', {
