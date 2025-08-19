@@ -91,9 +91,9 @@ const main = async () => {
         */
         app.post("/send-media-bot", async (req, res) => {
 
-            const { phoneNumber, message, base64Media, type } = req.body; // Extrae los parámetros del body
+            const { phoneNumber, message="", base64Media, type } = req.body; // Extrae los parámetros del body
 
-            if (!phoneNumber || !message || !base64Media || !type) {
+            if (!phoneNumber || !base64Media || !type) {
                 defaultLogger.warn("Parámetros 'phoneNumber' , 'message' , 'base64Media', 'type' son requeridos", {
                     phoneNumber: !!phoneNumber,
                     message: !!message
@@ -122,7 +122,9 @@ const main = async () => {
                     filePath = 'temp/file_' + new Date().toISOString() + '.pdf';
                     writeFileSync(filePath, base64Data, 'base64');
                     await adapterProvider.sendFile(`${phoneNumber}@c.us`, filePath);
-                    await adapterProvider.sendText(`${phoneNumber}@c.us`, message);
+                    if(message!==''){
+                        await adapterProvider.sendText(`${phoneNumber}@c.us`, message);
+                    }
                 }
 
                 defaultLogger.info(type+' Manual Enviado', {

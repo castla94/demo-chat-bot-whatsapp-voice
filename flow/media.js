@@ -1,7 +1,7 @@
 const { addKeyword, EVENTS } = require('@bot-whatsapp/bot')
 const { run } = require('../services/openai')
-const { 
-    getWhatsappConversation, 
+const {
+    getWhatsappConversation,
     putWhatsappEmailVendor,
     getWhatsapp,
     whatsappStatus,
@@ -83,7 +83,7 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserO
             hasAlarm,
             messageBody: question,
             action: 'alarm_found',
-            file:'media.js'
+            file: 'media.js'
         })
         await putWhatsapp(numberPhone, name, false)
         return true
@@ -174,6 +174,24 @@ const media = addKeyword(EVENTS.MEDIA)
                     action: 'user_disabled_end_flow',
                     file: 'media.js'
                 })
+
+                // Procesar y guardar la imagen recibida
+                const buffer = await downloadMediaMessage(ctx, "buffer")
+                const fileName = `imagen${numberPhone}-${Date.now()}.jpg`
+                const pathImg = `${process.cwd()}/media/${fileName}`
+                await fs.promises.writeFile(pathImg, buffer)
+                defaultLogger.info('Imagen guardada', {
+                    userId,
+                    numberPhone,
+                    name,
+                    fileName,
+                    action: 'image_saved',
+                    file: 'media.js'
+                })
+                const imageBuffer = fs.readFileSync(pathImg);
+                const base64Image = imageBuffer.toString('base64');
+                await postWhatsappConversation(numberPhone, "", "", base64Image);
+
                 return endFlow()
             }
 
@@ -188,7 +206,7 @@ const media = addKeyword(EVENTS.MEDIA)
             const buffer = await downloadMediaMessage(ctx, "buffer")
             const fileName = `imagen${numberPhone}-${Date.now()}.jpg`
             const pathImg = `${process.cwd()}/media/${fileName}`
-            
+
             await fs.promises.writeFile(pathImg, buffer)
             defaultLogger.info('Imagen guardada', {
                 userId,
@@ -199,8 +217,8 @@ const media = addKeyword(EVENTS.MEDIA)
                 file: 'media.js'
             })
 
-            const responseImage = await processImage(pathImg,numberPhone,name)  
-            
+            const responseImage = await processImage(pathImg, numberPhone, name)
+
             if (!responseImage && !userStatus.status) {
                 defaultLogger.info('Usuario desactivado', {
                     userId,
@@ -211,7 +229,7 @@ const media = addKeyword(EVENTS.MEDIA)
                 })
                 return endFlow()
             }
-            
+
             defaultLogger.info('Respuesta del modelo obtenida Imagen', {
                 userId,
                 numberPhone,
@@ -220,34 +238,34 @@ const media = addKeyword(EVENTS.MEDIA)
                 action: 'model_response',
                 file: 'media.js'
             })
-               // Get current conversation history from state
-               const historyGlobalStatus = state.getMyState()?.history ?? []
-               // Check if there's no conversation history
-               if (historyGlobalStatus.length <= 0) {
-                   // Fetch conversation history from database
-                   const historyDB = await getWhatsappConversation(numberPhone);
-                   defaultLogger.info('Historial de conversación recuperado de la base de datos', {
-                       userId,
-                       numberPhone,
-                       name,
-                       historyLength: historyDB?.length || 0,
-                       action: 'history_db_retrieved',
-                       file: 'media.js'
-                   })
-   
-                   defaultLogger.info('Estado actualizado con el historial de conversación', {
-                       userId,
-                       numberPhone,
-                       name,
-                       action: 'history_state_updated',
-                       file: 'media.js'
-                   })
-                   await state.update({ history: historyDB })
-               }
+            // Get current conversation history from state
+            const historyGlobalStatus = state.getMyState()?.history ?? []
+            // Check if there's no conversation history
+            if (historyGlobalStatus.length <= 0) {
+                // Fetch conversation history from database
+                const historyDB = await getWhatsappConversation(numberPhone);
+                defaultLogger.info('Historial de conversación recuperado de la base de datos', {
+                    userId,
+                    numberPhone,
+                    name,
+                    historyLength: historyDB?.length || 0,
+                    action: 'history_db_retrieved',
+                    file: 'media.js'
+                })
+
+                defaultLogger.info('Estado actualizado con el historial de conversación', {
+                    userId,
+                    numberPhone,
+                    name,
+                    action: 'history_state_updated',
+                    file: 'media.js'
+                })
+                await state.update({ history: historyDB })
+            }
 
             const newHistory = (state.getMyState()?.history ?? [])
 
-            const question =  `Te envio la imagen con la informacion solicitada: *${responseImage.text}*\n\n. 
+            const question = `Te envio la imagen con la informacion solicitada: *${responseImage.text}*\n\n. 
             IMPORTANTE : confirmo que la informacion es correcta.`
 
             newHistory.push({
@@ -256,7 +274,7 @@ const media = addKeyword(EVENTS.MEDIA)
             })
 
             // Obtener respuesta del modelo
-            const response = await run(name, newHistory, question, numberPhone,responseImage.img)
+            const response = await run(name, newHistory, question, numberPhone, responseImage.img)
             defaultLogger.info('Respuesta del modelo obtenida Texto Imagen', {
                 userId,
                 numberPhone,
@@ -265,7 +283,7 @@ const media = addKeyword(EVENTS.MEDIA)
                 action: 'model_response',
                 file: 'media.js'
             })
-            
+
             // Enviar respuesta en chunks
             //const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
             const chunks = response.split(/:\n\n|\n\n/)
@@ -299,7 +317,7 @@ const media = addKeyword(EVENTS.MEDIA)
                 `<br><br>${responseImage.text}<br>`,
                 responseImage.img
             )
-            
+
             defaultLogger.info('Notificación enviada al vendedor', {
                 userId,
                 numberPhone,
@@ -325,7 +343,7 @@ const media = addKeyword(EVENTS.MEDIA)
                     });
                 }
             });
-            
+
             return endFlow()
 
         } catch (error) {
