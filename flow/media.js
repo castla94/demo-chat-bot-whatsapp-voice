@@ -8,7 +8,8 @@ const {
     getWhatsappWhitelist,
     getWhatsappPlanPremiun,
     putWhatsapp,
-    regexAlarm
+    regexAlarm,
+    postWhatsappConversation
 } = require('../services/aws');
 const { downloadMediaMessage } = require("@adiwajshing/baileys")
 const fs = require("fs");

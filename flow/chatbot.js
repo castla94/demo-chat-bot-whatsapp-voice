@@ -330,8 +330,10 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                     file: 'chatbot.js'
                 })
 
-                // Check if message already exists in buffer to avoid duplicates
-                if (newHistory.some(msg => msg.role === 'assistant' && msg.content === response)) {
+                // Check if the last message from assistant matches the current response
+                if (newHistory.length >= 2 && 
+                    newHistory[newHistory.length - 2].role === 'assistant' && 
+                    newHistory[newHistory.length - 2].content === response) {
                     defaultLogger.info('Mensaje duplicado OpenIA, ignorando...', {
                         userId,
                         numberPhone,
