@@ -191,7 +191,7 @@ const media = addKeyword(EVENTS.MEDIA)
                 })
                 const imageBuffer = fs.readFileSync(pathImg);
                 const base64Image = imageBuffer.toString('base64');
-                await postWhatsappConversation(numberPhone, "", "", base64Image,"imagen","openia");
+                await postWhatsappConversation(numberPhone, "", "", base64Image,"imagen","user");
 
                 return endFlow()
             }
