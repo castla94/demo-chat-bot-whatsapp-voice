@@ -70,7 +70,7 @@ const main = async () => {
                     timestamp: new Date().toISOString()
                 });
 
-                await postWhatsappConversation(phoneNumber, "", message);
+                await postWhatsappConversation(phoneNumber, "", message,"","",'openia');
 
                 res.send({ data: "enviado" });
             } catch (error) {
@@ -133,7 +133,7 @@ const main = async () => {
                     timestamp: new Date().toISOString()
                 });
 
-                await postWhatsappConversation(phoneNumber, "", message,base64Media,type);
+                await postWhatsappConversation(phoneNumber, "", message,base64Media,type,'openia');
 
                 if(filePath !==''){
                     unlinkSync(filePath);

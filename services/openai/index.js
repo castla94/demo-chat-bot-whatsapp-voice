@@ -162,8 +162,8 @@ const run = async (name, history, question, phone,imageBase64 = "") => {
             frequency_penalty: 0,
             presence_penalty: 0,
         });
-
-        await postWhatsappConversation(phone, question, response.choices[0].message.content,imageBase64);
+        const type = imageBase64 !== "" ? 'imagen' : '';
+        await postWhatsappConversation(phone, question, response.choices[0].message.content,imageBase64,type);
         await processTokenUsage(response, availableCredits, userId, numberPhone, name);
 
         return response.choices[0].message.content.replace(/\*\*/g, '*');

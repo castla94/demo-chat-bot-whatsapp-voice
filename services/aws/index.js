@@ -36,7 +36,7 @@ const postWhatsappCredit = async (credit) => {
  * @param {string} message_openia - Respuesta del sistema
  * @returns {Promise<Object|null>} Respuesta de la API o null si hay error
  */
-const postWhatsappConversation = async (phone, message_user, message_openia,imageBase64 = "",type = "imagen") => {
+const postWhatsappConversation = async (phone, message_user, message_openia,imageBase64 = "",type = "",type_user="") => {
   const email_bk = process.env.EMAIL_TOKEN;
   const endpoint = `${BASE_URL}/whatsapp-conversation`;
 
@@ -46,7 +46,8 @@ const postWhatsappConversation = async (phone, message_user, message_openia,imag
       message_user,
       message_openia,
       imageBase64,
-      type
+      type,
+      type_user
     });
     return response.data;
   } catch (error) {
