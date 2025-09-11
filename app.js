@@ -112,14 +112,14 @@ const main = async () => {
                 // Paso 2: guardar archivo temporal
                 if(type == 'imagen'){
                     // Paso 2: guardar archivo temporal
-                    filePath = 'temp/imagen_' + new Date().toISOString() + '.jpg';
+                    filePath = 'temp/imagen_' + new Date().toISOString() + '';
                     writeFileSync(filePath, base64Data, 'base64');
                     await adapterProvider.sendImage(`${phoneNumber}@c.us`, filePath, message);
 
                 }
                 if(type == 'file'){
                     // Paso 2: guardar archivo temporal
-                    filePath = 'temp/file_' + new Date().toISOString() + '.pdf';
+                    filePath = 'temp/file_' + new Date().toISOString() + '';
                     writeFileSync(filePath, base64Data, 'base64');
                     await adapterProvider.sendFile(`${phoneNumber}@c.us`, filePath);
                     if(message!==''){

@@ -156,7 +156,7 @@ const run = async (name, history, question, phone,imageBase64 = "") => {
                 { role: "system", content: prompt },
                 ...history
             ],
-            temperature: 0.5,
+            temperature: 0.4,
             max_tokens: 800,
             top_p: 0.5,
             frequency_penalty: 0,
