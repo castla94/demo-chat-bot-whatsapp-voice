@@ -38,6 +38,22 @@ const main = async () => {
             database: adapterDB,
         });
 
+         adapterProvider.on('message', async (message) => {
+            const messageBody = message.message?.conversation || message.message?.extendedTextMessage?.text;
+            const userId = message.key.remoteJid
+            const numberPhone = message.from
+            const name = message?.pushName ?? ''
+
+            defaultLogger.info('Mensaje crudo recibido', { 
+                    userId,
+                    numberPhone,
+                    name,
+                    action: 'message_natural',
+                    file: 'app.js',
+                    messageBody 
+                });
+        });
+
         // Iniciar portal web para código QR
         const port = process.env.PORT || 3000;
         QRPortalWeb({ port });
