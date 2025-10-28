@@ -184,12 +184,15 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
         }
     })
     // Segunda acción: Procesamiento de audio y generación de respuesta
-    .addAction(async (ctx, { flowDynamic, endFlow, state }) => {
+    .addAction(async (ctx, { flowDynamic, endFlow, state, provider }) => {
         const userId = ctx.key.remoteJid
         const name = ctx?.pushName ?? ''
         const numberPhone = ctx.from
 
         try {
+            // 1. Enviar estado "escribiendo"
+            await provider.vendor.sendPresenceUpdate('composing', ctx.key.remoteJid)
+            
             defaultLogger.info('Iniciando segunda acción de voz', {
                 userId,
                 numberPhone,
@@ -399,6 +402,12 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
                 file: 'voice.js'
             })
             return endFlow()
+        }finally{
+            await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
+            // Sleep de 500 ms para dar tiempo a procesos internos antes de marcar como leído
+            await new Promise(resolve => setTimeout(resolve, 500));
+            // Aquí puedes marcar el mensaje como leído
+            await provider.vendor.readMessages([ctx.key])
         }
     })
 

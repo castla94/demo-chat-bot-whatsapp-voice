@@ -97,12 +97,16 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserO
  * Procesa comprobantes de pago y notifica al vendedor
  */
 const media = addKeyword(EVENTS.MEDIA)
-    .addAction(async (ctx, { flowDynamic, endFlow, state }) => {
+    .addAction(async (ctx, { flowDynamic, endFlow, state, provider }) => {
         const userId = ctx.key.remoteJid
         const numberPhone = ctx.from
         const name = ctx?.pushName ?? ''
 
         try {
+
+            // 1. Enviar estado "escribiendo"
+            await provider.vendor.sendPresenceUpdate('composing', ctx.key.remoteJid)
+
             defaultLogger.info('Iniciando procesamiento de imagen', {
                 userId,
                 numberPhone,
@@ -357,10 +361,13 @@ const media = addKeyword(EVENTS.MEDIA)
                 context: ctx,
                 file: 'media.js'
             })
-            await flowDynamic(
-                "Ocurrió un error al procesar tu imagen. Por favor, intenta nuevamente."
-            )
             return endFlow()
+        }finally{
+            await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
+            // Sleep de 500 ms para dar tiempo a procesos internos antes de marcar como leído
+            await new Promise(resolve => setTimeout(resolve, 500));
+            // Aquí puedes marcar el mensaje como leído
+            await provider.vendor.readMessages([ctx.key])
         }
     })
 

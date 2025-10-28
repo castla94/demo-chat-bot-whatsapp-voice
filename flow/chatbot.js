@@ -199,8 +199,12 @@ const chatbot = addKeyword(EVENTS.WELCOME)
         }
     })
     // Segunda acción: Procesamiento de respuesta y gestión de conversación
-    .addAction(async (ctx, { flowDynamic, endFlow, state }) => {
+    .addAction(async (ctx, { flowDynamic, endFlow, state, provider }) => {
         try {
+
+            // 1. Enviar estado "escribiendo"
+            await provider.vendor.sendPresenceUpdate('composing', ctx.key.remoteJid)
+
             const userId = ctx.key.remoteJid
             const numberPhone = ctx.from
             const name = ctx?.pushName ?? ''
@@ -438,6 +442,12 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 context: ctx,
                 file: 'chatbot.js'
             })
+        }finally{
+            await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
+            // Sleep de 500 ms para dar tiempo a procesos internos antes de marcar como leído
+            await new Promise(resolve => setTimeout(resolve, 500));
+            // Aquí puedes marcar el mensaje como leído
+            await provider.vendor.readMessages([ctx.key])
         }
     })
 

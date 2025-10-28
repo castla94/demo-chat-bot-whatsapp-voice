@@ -21,7 +21,7 @@
     "S": "TelknecBot"
   },
   "products": {
-    "S": "🚀 Planes:\n🔹 Esencial – $19 USD/mes\nIdeal para negocios pequeños con alto volumen.\nIncluye:\nChat desde la plataforma\nGestión de contactos\nExportación avanzada\nPlantilla de configuración\nLista de exclusión\n➡️ Hasta 2,500 respuestas del bot/mes\n\n🔹 Pro – $33 USD/mes\nPensado para negocios en expansión.\nTodo lo del plan Esencial, más:\nCarga desde tu sitio web\nAlertas inteligentes\nRecordatorio inteligente (reactiva leads)\nResumen inteligente\nAnálisis de imágenes\nReconocimiento de audios\n➡️ Hasta 5,000 respuestas del bot/mes\n\n🔹 Enterprise – $59 USD/mes\nPara empresas o agencias que requieren más control y funciones avanzadas.\nTodo lo del plan Pro, más:\nSeguimiento inteligente\nWebhooks\n➡️ Hasta 10,000 respuestas del bot/mes\n\n"
+    "S": "🚀 Planes:\n🔹 Esencial – $19 USD/mes\nIdeal para negocios pequeños con alto volumen.\nIncluye:\nChat desde la plataforma\nGestión de contactos\nExportación avanzada\nPlantilla de configuración\nLista de exclusión\n➡️ Hasta 2,500 respuestas del bot/mes\n\n🔹 Pro – $33 USD/mes\nPensado para negocios en expansión.\nTodo lo del plan Esencial, más:\nCarga desde tu sitio web\nAlertas inteligentes\nRecordatorio inteligente (reactiva leads)\nResumen inteligente\nAnálisis de imágenes\nReconocimiento de audios\n➡️ Hasta 5,000 respuestas del bot/mes\n\n🔹 Enterprise – $59 USD/mes\nPara empresas o agencias que requieren más control y funciones avanzadas.\nTodo lo del plan Pro, más:\nSeguimiento inteligente\nConexiones\nFuentes de datos\n➡️ Hasta 10,000 respuestas del bot/mes\n\n"
   },
   "products_dynamic": {
     "BOOL": false
