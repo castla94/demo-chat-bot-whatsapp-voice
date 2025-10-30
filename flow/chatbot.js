@@ -410,7 +410,9 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 }
 
                 for (const chunk of chunks) {
-                    await flowDynamic(chunk.replace(/^[\n]+/, '').trim())
+                    await flowDynamic([
+                        {body: chunk.replace(/^[\n]+/, '').trim()}
+                    ])
                     await sleep(2000)
                 }
 
@@ -443,11 +445,9 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 file: 'chatbot.js'
             })
         }finally{
-            await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
-            // Sleep de 500 ms para dar tiempo a procesos internos antes de marcar como leído
-            await new Promise(resolve => setTimeout(resolve, 500));
-            // Aquí puedes marcar el mensaje como leído
             await provider.vendor.readMessages([ctx.key])
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
         }
     })
 
@@ -521,10 +521,11 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserO
 
         const message = UserOrIA === "user" ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo." : question
 
-        await flowDynamic(alarmResponse
+        await flowDynamic([{
+            body: alarmResponse
             ? message
             : "Lo sentimos, pero no tenemos personal disponible en este momento."
-        )
+        }])
 
         await putWhatsapp(numberPhone, name, false)
         return true

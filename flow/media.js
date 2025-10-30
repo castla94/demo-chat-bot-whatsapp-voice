@@ -44,7 +44,9 @@ const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
             action: 'without_plan',
             file: 'media.js'
         })
-        await flowDynamic("Lo siento, no puedo procesar tu imagen. Por favor, envíame por texto lo que necesitas consultar.")
+        await flowDynamic([{
+            body: "Lo siento, no puedo procesar tu imagen. Por favor, envíame por texto lo que necesitas consultar."
+        }])
         return true
     }
 
@@ -56,7 +58,9 @@ const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
             action: 'without_plan_pro',
             file: 'media.js'
         })
-        await flowDynamic("Lo siento, no puedo procesar tu imagen. Por favor, envíame por texto lo que necesitas consultar.")
+        await flowDynamic([{
+            body: "Lo siento, no puedo procesar tu imagen. Por favor, envíame por texto lo que necesitas consultar."
+        }])
         return true
     }
 
@@ -205,7 +209,9 @@ const media = addKeyword(EVENTS.MEDIA)
             const shouldEndFlow = await checkPremiumPlan(userId, numberPhone, name, flowDynamic)
             if (shouldEndFlow) return endFlow()
 
-            await flowDynamic("Dame un momento para revisar.")
+            await flowDynamic([{
+                body: "Dame un momento para revisar."
+            }])
 
             // Procesar y guardar la imagen recibida
             const buffer = await downloadMediaMessage(ctx, "buffer")
@@ -294,7 +300,9 @@ const media = addKeyword(EVENTS.MEDIA)
             const chunks = response.split(/:\n\n|\n\n/)
 
             for (const chunk of chunks) {
-                await flowDynamic(chunk.replace(/^[\n]+/, '').trim())
+                await flowDynamic([{
+                    body: chunk.replace(/^[\n]+/, '').trim()
+                }])
                 await sleep(2000)
             }
 
@@ -363,11 +371,9 @@ const media = addKeyword(EVENTS.MEDIA)
             })
             return endFlow()
         }finally{
-            await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
-            // Sleep de 500 ms para dar tiempo a procesos internos antes de marcar como leído
-            await new Promise(resolve => setTimeout(resolve, 500));
-            // Aquí puedes marcar el mensaje como leído
             await provider.vendor.readMessages([ctx.key])
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
         }
     })
 

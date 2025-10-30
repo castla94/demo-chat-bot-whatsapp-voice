@@ -38,7 +38,9 @@ const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
             action: 'without_plan',
             file: 'voice.js'
         })
-        await flowDynamic("Lo siento, no puedo procesar notas de voz en este momento. Por favor, escribe tu consulta en un mensaje de texto.")
+        await flowDynamic([{
+            body: "Lo siento, no puedo procesar notas de voz en este momento. Por favor, escribe tu consulta en un mensaje de texto."
+        }])
         return true
     }
     console.log("isPremiun",isPremiun)
@@ -50,7 +52,9 @@ const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
             action: 'without_plan_pro',
             file: 'voice.js'
         })
-        await flowDynamic("Lo siento, no puedo procesar notas de voz en este momento. Por favor, escribe tu consulta en un mensaje de texto.")
+        await flowDynamic([{
+            body: "Lo siento, no puedo procesar notas de voz en este momento. Por favor, escribe tu consulta en un mensaje de texto."
+        }])
         return true
     }
 
@@ -192,7 +196,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
         try {
             // 1. Enviar estado "escribiendo"
             await provider.vendor.sendPresenceUpdate('composing', ctx.key.remoteJid)
-            
+
             defaultLogger.info('Iniciando segunda acción de voz', {
                 userId,
                 numberPhone,
@@ -287,7 +291,9 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
             })
 
             if(transcribedText === "ERROR"){
-                await flowDynamic("Disculpa, no entendí tu mensaje. Por favor, puedes enviarlo de nuevo.")
+                await flowDynamic([{
+                    body: "Disculpa, no entendí tu mensaje. Por favor, puedes enviarlo de nuevo."
+                }])
                 return endFlow()
             }
 
@@ -370,8 +376,10 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
             const chunks = response.split(/:\n\n|\n\n/)
 
             for (const chunk of chunks) {
-                await flowDynamic(chunk.replace(/^[\n]+/, '').trim())
-                await setTimeout(1000)
+                await flowDynamic([{
+                    body: chunk.replace(/^[\n]+/, '').trim()
+                }])
+                await setTimeout(2000)
             }
 
             // Actualizar historial con respuesta
@@ -403,11 +411,9 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
             })
             return endFlow()
         }finally{
-            await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
-            // Sleep de 500 ms para dar tiempo a procesos internos antes de marcar como leído
-            await new Promise(resolve => setTimeout(resolve, 500));
-            // Aquí puedes marcar el mensaje como leído
             await provider.vendor.readMessages([ctx.key])
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
         }
     })
 
@@ -445,10 +451,11 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,messag
 
         const messageFlow = UserOrIA === "user" ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo." : question
 
-        await flowDynamic(alarmResponse 
+        await flowDynamic([{
+            body: alarmResponse 
             ? messageFlow
             : "Lo sentimos, pero no tenemos personal disponible en este momento."
-        )
+        }])
         
         await putWhatsapp(numberPhone, name, false)
         return true
