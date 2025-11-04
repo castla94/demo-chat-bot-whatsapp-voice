@@ -501,7 +501,7 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserO
         file: 'chatbot.js'
     })
 
-    if (hasAlarm) {
+    if (hasAlarm || numberPhone.length >= 15) {
 
         if (UserOrIA === "user") {
             await postWhatsappConversation(numberPhone, question, "");
