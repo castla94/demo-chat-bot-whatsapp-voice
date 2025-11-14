@@ -11,7 +11,7 @@ const {
     regexAlarm,
     postWhatsappConversation
 } = require('../services/aws');
-const { downloadMediaMessage } = require("@adiwajshing/baileys")
+const { downloadMediaMessage } = require("@whiskeysockets/baileys")
 const fs = require("fs");
 const { defaultLogger } = require('../helpers/cloudWatchLogger');
 const { processImage } = require("../services/image")

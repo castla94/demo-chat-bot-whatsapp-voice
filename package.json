@@ -10,7 +10,6 @@
     },
     "keywords": [],
     "dependencies": {
-        "@adiwajshing/baileys": "^5.0.0",
         "@bot-whatsapp/bot": "latest",
         "@bot-whatsapp/cli": "latest",
         "@bot-whatsapp/database": "latest",

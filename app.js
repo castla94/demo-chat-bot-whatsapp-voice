@@ -29,7 +29,13 @@ const main = async () => {
             chatbot,
             media
         ]);
-        const adapterProvider = createProvider(BaileysProvider);
+        const adapterProvider = createProvider(BaileysProvider, {
+            // Estas opciones son ignoradas por algunas versiones,
+            // pero si tu versión las soporta, evitarán full sync:
+            readIncomingMessages: true,
+            syncFullHistory: false,
+            shouldSyncHistoryMessage: false,
+        });
 
         // Crear instancia del bot
         const bot = createBot({
