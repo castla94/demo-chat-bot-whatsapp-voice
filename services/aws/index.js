@@ -1,6 +1,7 @@
-const axios = require('axios');
-const { defaultLogger } = require('../../helpers/cloudWatchLogger');
-require('dotenv').config();
+import axios from 'axios';
+import { defaultLogger } from '../../helpers/cloudWatchLogger.js';
+import dotenv from 'dotenv';
+dotenv.config();
 
 // Constantes para configuración
 const BASE_URL = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV';
@@ -10,7 +11,7 @@ const BASE_URL = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV';
  * @param {number} credit - Cantidad de créditos a registrar
  * @returns {Promise<Object|null>} Respuesta de la API o null si hay error
  */
-const postWhatsappCredit = async (credit) => {
+export const postWhatsappCredit = async (credit) => {
   const email_bk = process.env.EMAIL_TOKEN;
   const endpoint = `${BASE_URL}/whatsapp-setting/credits`;
 
@@ -36,7 +37,7 @@ const postWhatsappCredit = async (credit) => {
  * @param {string} message_openia - Respuesta del sistema
  * @returns {Promise<Object|null>} Respuesta de la API o null si hay error
  */
-const postWhatsappConversation = async (phone, message_user, message_openia,imageBase64 = "",type = "",type_user="") => {
+export const postWhatsappConversation = async (phone, message_user, message_openia,imageBase64 = "",type = "",type_user="") => {
   const email_bk = process.env.EMAIL_TOKEN;
   const endpoint = `${BASE_URL}/whatsapp-conversation`;
 
@@ -67,7 +68,7 @@ const postWhatsappConversation = async (phone, message_user, message_openia,imag
  * Obtiene listado de conversaciones
  * @returns {Promise<number|null>} Objeto array con listado de conversaciones
  */
-const getWhatsappConversation = async (number) => {
+export const getWhatsappConversation = async (number) => {
   const endpoint = `${BASE_URL}/whatsapp-conversation`;
   const email_bk = process.env.EMAIL_TOKEN;
   try {
@@ -105,7 +106,7 @@ const getWhatsappConversation = async (number) => {
  * Obtiene los créditos disponibles
  * @returns {Promise<number|null>} Cantidad de créditos o null si hay error
  */
-const getWhatsappCredit = async () => {
+export const getWhatsappCredit = async () => {
   const endpoint = `${BASE_URL}/whatsapp-setting/credits`;
   const email_bk = process.env.EMAIL_TOKEN;
 
@@ -129,7 +130,7 @@ const getWhatsappCredit = async () => {
  * Obtiene los créditos disponibles
  * @returns {Promise<number|null>} Cantidad de créditos o null si hay error
  */
-const getWhatsappPlanPremiun = async () => {
+export const getWhatsappPlanPremiun = async () => {
   const endpoint = `${BASE_URL}/whatsapp-setting/credits`;
   const email_bk = process.env.EMAIL_TOKEN;
 
@@ -154,7 +155,7 @@ const getWhatsappPlanPremiun = async () => {
  * @param {string} phone - Número a verificar
  * @returns {Promise<boolean|null>} true si está en la lista, false si no, null si hay error
  */
-const getWhatsappWhitelist = async (phone) => {
+export const getWhatsappWhitelist = async (phone) => {
   const endpoint = `${BASE_URL}/whatsapp-sessions-whitelist`;
   const email_bk = process.env.EMAIL_TOKEN;
 
@@ -179,7 +180,7 @@ const getWhatsappWhitelist = async (phone) => {
  * @param {string} number - Número a consultar
  * @returns {Promise<Object|null>} Datos del número o null si hay error
  */
-const getWhatsapp = async (number) => {
+export const getWhatsapp = async (number) => {
   const endpoint = `${BASE_URL}/whatsapp`;
   const email = process.env.EMAIL_TOKEN;
 
@@ -205,7 +206,7 @@ const getWhatsapp = async (number) => {
  * @param {boolean} status - Estado a establecer
  * @returns {Promise<Object|null>} Respuesta de la API o null si hay error
  */
-const putWhatsapp = async (number, name, status) => {
+export const putWhatsapp = async (number, name, status) => {
   const endpoint = `${BASE_URL}/whatsapp`;
   const email = process.env.EMAIL_TOKEN;
 
@@ -238,7 +239,7 @@ const putWhatsapp = async (number, name, status) => {
  * @param {string} message - Mensaje del cliente
  * @returns {Promise<boolean|null>} true si se envió correctamente, false si no, null si hay error
  */
-const putWhatsappEmailVendor = async (number, name, message,image="") => {
+export const putWhatsappEmailVendor = async (number, name, message,image="") => {
   const endpoint = `${BASE_URL}/whatsapp-email-vendor`;
   const email_token = process.env.EMAIL_TOKEN;
 
@@ -269,7 +270,7 @@ const putWhatsappEmailVendor = async (number, name, message,image="") => {
  * @param {string} message - Mensaje a verificar
  * @returns {Promise<boolean|null>} true si contiene alarmas, false si no, null si hay error
  */
-const regexAlarm = async (message) => {
+export const regexAlarm = async (message) => {
   const endpoint = `${BASE_URL}/whatsapp-sessions-alarm/regex`;
   const email_token = process.env.EMAIL_TOKEN;
 
@@ -298,7 +299,7 @@ const regexAlarm = async (message) => {
  * @param {string} status - Estado de la orden
  * @returns {Promise<Object|null>} Respuesta de la API o null si hay error
  */
-const putWhatsappOrderConfirmation = async (name, phone, message, status) => {
+export const putWhatsappOrderConfirmation = async (name, phone, message, status) => {
   const endpoint = `${BASE_URL}/whatsapp-order`;
   const email = process.env.EMAIL_TOKEN;
 
@@ -387,7 +388,7 @@ const putWhatsappOrderConfirmation = async (name, phone, message, status) => {
  * Obtiene el estado global del sistema WhatsApp
  * @returns {Promise<Object|null>} Estado del sistema o null si hay error
  */
-const whatsappStatus = async () => {
+export const whatsappStatus = async () => {
   const endpoint = `${BASE_URL}/whatsapp-statatus`;
   const email = process.env.EMAIL_TOKEN;
 
@@ -410,7 +411,7 @@ const whatsappStatus = async () => {
  * Obtiene el prompt configurado para WhatsApp
  * @returns {Promise<Object|null>} Configuración del prompt o null si hay error
  */
-const promptGetWhatsapp = async () => {
+export const promptGetWhatsapp = async () => {
   const endpoint = `${BASE_URL}/whatsapp-prompt`;
   const email = process.env.EMAIL_TOKEN;
 
@@ -435,7 +436,7 @@ const promptGetWhatsapp = async () => {
  * @param {Object} products - Objeto con los productos y servicios a actualizar
  * @returns {Promise<Object|null>} Resultado de la actualización o null si hay error
  */
-const promptUpdateProductWhatsapp = async (products) => {
+export const promptUpdateProductWhatsapp = async (products) => {
   const endpoint = `${BASE_URL}/whatsapp-prompt/update-prompt-product-and-services`;
   const email = process.env.EMAIL_TOKEN;
 
@@ -451,21 +452,4 @@ const promptUpdateProductWhatsapp = async (products) => {
     });
     return null;
   }
-};
-
-module.exports = {
-  getWhatsapp,
-  putWhatsapp,
-  putWhatsappEmailVendor,
-  putWhatsappOrderConfirmation,
-  whatsappStatus,
-  promptGetWhatsapp,
-  regexAlarm,
-  getWhatsappCredit,
-  postWhatsappCredit,
-  postWhatsappConversation,
-  getWhatsappWhitelist,
-  promptUpdateProductWhatsapp,
-  getWhatsappConversation,
-  getWhatsappPlanPremiun
 };

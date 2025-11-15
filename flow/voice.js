@@ -1,7 +1,7 @@
-const { addKeyword, EVENTS } = require('@bot-whatsapp/bot')
-const { handlerAI } = require("../services/audio")
-const { run, runDetermine, runUpdatePromptServicesProduct } = require('../services/openai')
-const { 
+import { addKeyword, EVENTS } from '@builderbot/bot'
+import { handlerAI } from "../services/audio/index.js"
+import { run, runUpdatePromptServicesProduct } from '../services/openai/index.js'   
+import { 
     getWhatsapp,
     putWhatsapp,
     whatsappStatus, 
@@ -14,9 +14,9 @@ const {
     getWhatsappConversation,
     postWhatsappConversation,
     getWhatsappPlanPremiun
-} = require('../services/aws')
-const { setTimeout } = require('timers/promises')
-const { defaultLogger } = require('../helpers/cloudWatchLogger')
+} from '../services/aws/index.js'
+import { setTimeout } from 'timers/promises'
+import { defaultLogger } from '../helpers/cloudWatchLogger.js'
 
  
 // Function to check premium plan status
@@ -65,11 +65,11 @@ const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
  * Flujo para manejar notas de voz
  * Procesa el audio, lo convierte a texto y genera respuestas
  */
-const voice = addKeyword(EVENTS.VOICE_NOTE)
+export const voice = addKeyword(EVENTS.VOICE_NOTE)
     // Primera acción: Validación inicial y análisis de intención
     .addAction(async (ctx, { state, endFlow,flowDynamic }) => {
         const userId = ctx.key.remoteJid
-        const numberPhone = ctx.from
+        const numberPhone = ctx.host
         const name = ctx?.pushName ?? ''
 
         try {
@@ -191,7 +191,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
     .addAction(async (ctx, { flowDynamic, endFlow, state, provider }) => {
         const userId = ctx.key.remoteJid
         const name = ctx?.pushName ?? ''
-        const numberPhone = ctx.from
+        const numberPhone = ctx.host
 
         try {
             // 1. Enviar estado "escribiendo"
@@ -280,7 +280,7 @@ const voice = addKeyword(EVENTS.VOICE_NOTE)
             }
 
             // Convertir audio a texto
-            const transcribedText = await handlerAI(ctx, numberPhone)
+            const transcribedText = await handlerAI(ctx,provider, numberPhone)
             defaultLogger.info('Audio transcrito', {
                 userId,
                 numberPhone,
@@ -462,5 +462,3 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,messag
     }
     return false
 }
-
-module.exports = { voice }

@@ -1,10 +1,9 @@
-const OpenAI = require("openai");
-const fs = require('fs');
-const { runAnalyzeImage } = require('../openai/index.js');
+import OpenAI from "openai";
+import fs from 'fs';
+import { runAnalyzeImage } from '../openai/index.js';
+import { defaultLogger } from '../../helpers/cloudWatchLogger.js';
 
-const { defaultLogger } = require('../../helpers/cloudWatchLogger');
-
-async function processImage(imagePath,phone,name) {
+export async function processImage(imagePath,phone,name) {
     try {
         // Verificar que el archivo existe
         if (!fs.existsSync(imagePath)) {
@@ -49,5 +48,3 @@ async function processImage(imagePath,phone,name) {
         throw error;
     }
 }
-
-module.exports = { processImage };

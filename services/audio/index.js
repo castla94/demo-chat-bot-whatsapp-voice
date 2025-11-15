@@ -1,14 +1,12 @@
-const { downloadMediaMessage } = require("@whiskeysockets/baileys");
-const OpenAI = require("openai");
-const ffmpegPath = require("@ffmpeg-installer/ffmpeg").path;
-const ffmpeg = require("fluent-ffmpeg");
-const fs = require("fs");
-const { defaultLogger } = require('../../helpers/cloudWatchLogger');
+import OpenAI from "openai";
+import { path as ffmpegPath } from "@ffmpeg-installer/ffmpeg";
+import ffmpeg from "fluent-ffmpeg";
+import fs from "fs";
+import { defaultLogger } from "../../helpers/cloudWatchLogger.js";
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
-
-const textToVoice = async (userId, numberPhone, name, textToVoice) => {
+export const textToVoice = async (userId, numberPhone, name, textToVoice) => {
 
 
     try {
@@ -86,7 +84,9 @@ const textToVoice = async (userId, numberPhone, name, textToVoice) => {
         return "ERROR";
     }
 };
-const voiceToText = async (path, userId, numberPhone, name) => {
+
+
+export const voiceToText = async (path, userId, numberPhone, name) => {
     if (!fs.existsSync(path)) {
         defaultLogger.error('Archivo de audio no encontrado', {
             userId,
@@ -123,7 +123,7 @@ const voiceToText = async (path, userId, numberPhone, name) => {
     }
 };
 
-const convertOggMp3 = async (inputStream, outStream, userId, numberPhone, name) => {
+export const convertOggMp3 = async (inputStream, outStream, userId, numberPhone, name) => {
     return new Promise((resolve, reject) => {
         ffmpeg(inputStream)
             .audioQuality(96)
@@ -154,18 +154,18 @@ const convertOggMp3 = async (inputStream, outStream, userId, numberPhone, name) 
     });
 };
 
-const handlerAI = async (ctx, phone) => {
+
+
+export const handlerAI = async (ctx,provider, phone) => {
     const userId = ctx.key.remoteJid;
     const name = ctx?.pushName ?? '';
     const numberPhone = phone;
 
     try {
-
-        const buffer = await downloadMediaMessage(ctx, "buffer");
-        const pathTmpOgg = `${process.cwd()}/audio/voice-note-${Date.now()}-${phone}.ogg`;
+        const pathImg = await provider.saveFile(ctx, {path:`${process.cwd()}/audio/`})
+        const pathTmpOgg = pathImg;
         const pathTmpMp3 = `${process.cwd()}/audio/voice-note-${Date.now()}-${phone}.mp3`;
 
-        await fs.writeFileSync(pathTmpOgg, buffer);
         await convertOggMp3(pathTmpOgg, pathTmpMp3, userId, numberPhone, name);
         const text = await voiceToText(pathTmpMp3, userId, numberPhone, name);
 
@@ -209,5 +209,3 @@ const handlerAI = async (ctx, phone) => {
         return "ERROR";
     }
 };
-
-module.exports = { handlerAI, textToVoice };

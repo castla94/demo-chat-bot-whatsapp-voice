@@ -1,6 +1,6 @@
-const { addKeyword, EVENTS } = require('@bot-whatsapp/bot')
-const { run } = require('../services/openai')
-const {
+import { addKeyword, EVENTS } from '@builderbot/bot';
+import { run } from '../services/openai/index.js';
+import {
     getWhatsappConversation,
     putWhatsappEmailVendor,
     getWhatsapp,
@@ -10,11 +10,10 @@ const {
     putWhatsapp,
     regexAlarm,
     postWhatsappConversation
-} = require('../services/aws');
-const { downloadMediaMessage } = require("@whiskeysockets/baileys")
-const fs = require("fs");
-const { defaultLogger } = require('../helpers/cloudWatchLogger');
-const { processImage } = require("../services/image")
+} from '../services/aws/index.js';
+import fs from "fs";
+import { defaultLogger } from '../helpers/cloudWatchLogger.js';
+import { processImage } from "../services/image/index.js";
 
 
 /**
@@ -100,10 +99,10 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserO
  * Flow para manejar eventos de medios (imágenes) enviados por el usuario
  * Procesa comprobantes de pago y notifica al vendedor
  */
-const media = addKeyword(EVENTS.MEDIA)
+export const media = addKeyword(EVENTS.MEDIA)
     .addAction(async (ctx, { flowDynamic, endFlow, state, provider }) => {
         const userId = ctx.key.remoteJid
-        const numberPhone = ctx.from
+        const numberPhone = ctx.host
         const name = ctx?.pushName ?? ''
 
         try {
@@ -185,15 +184,14 @@ const media = addKeyword(EVENTS.MEDIA)
                 })
 
                 // Procesar y guardar la imagen recibida
-                const buffer = await downloadMediaMessage(ctx, "buffer")
-                const fileName = `imagen${numberPhone}-${Date.now()}.jpg`
-                const pathImg = `${process.cwd()}/media/${fileName}`
-                await fs.promises.writeFile(pathImg, buffer)
+                
+                const pathImg = await provider.saveFile(ctx, {path:`${process.cwd()}/media/`})
+
                 defaultLogger.info('Imagen guardada', {
                     userId,
                     numberPhone,
                     name,
-                    fileName,
+                    pathImg,
                     action: 'image_saved',
                     file: 'media.js'
                 })
@@ -214,16 +212,13 @@ const media = addKeyword(EVENTS.MEDIA)
             }])
 
             // Procesar y guardar la imagen recibida
-            const buffer = await downloadMediaMessage(ctx, "buffer")
-            const fileName = `imagen${numberPhone}-${Date.now()}.jpg`
-            const pathImg = `${process.cwd()}/media/${fileName}`
+            const pathImg = await provider.saveFile(ctx, {path:`${process.cwd()}/media/`})
 
-            await fs.promises.writeFile(pathImg, buffer)
             defaultLogger.info('Imagen guardada', {
                 userId,
                 numberPhone,
                 name,
-                fileName,
+                pathImg,
                 action: 'image_saved',
                 file: 'media.js'
             })
@@ -377,4 +372,3 @@ const media = addKeyword(EVENTS.MEDIA)
         }
     })
 
-module.exports = { media }

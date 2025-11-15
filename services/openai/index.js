@@ -1,26 +1,27 @@
-const OpenAI = require("openai");
-const { generatePrompt, generatePromptDetermine } = require("./prompt.js");
-const { getWhatsappCredit, postWhatsappCredit, postWhatsappConversation, promptGetWhatsapp } = require('../aws/index.js');
-const { defaultLogger } = require('../../helpers/cloudWatchLogger.js');
-require('dotenv').config();
+import OpenAI from "openai";
+import { generatePrompt, generatePromptDetermine } from "./prompt.js";
+import { getWhatsappCredit, postWhatsappCredit, postWhatsappConversation, promptGetWhatsapp } from '../aws/index.js';
+import { defaultLogger } from '../../helpers/cloudWatchLogger.js';
+import dotenv from 'dotenv';
+dotenv.config();
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
 });
 
-const calculateCostInDollars = (promptTokens, completionTokens) => {
+export const calculateCostInDollars = (promptTokens, completionTokens) => {
     const inputCost = (promptTokens / 1000) * 0.00015;
     const outputCost = (completionTokens / 1000) * 0.0006;
     return inputCost + outputCost;
 };
 
-const calculateCredits = (promptTokens, completionTokens) => {
+export const calculateCredits = (promptTokens, completionTokens) => {
     const dollarsAmount = calculateCostInDollars(promptTokens, completionTokens) / 0.001;
     return parseFloat(dollarsAmount.toFixed(2));
 };
 
 
-async function processTokenUsage(responseOpenAI, availableCredits, userId, numberPhone, name) {
+export async function processTokenUsage(responseOpenAI, availableCredits, userId, numberPhone, name) {
     const { prompt_tokens, completion_tokens } = responseOpenAI.usage;
     
     defaultLogger.info('Créditos disponibles', {
@@ -59,7 +60,7 @@ async function processTokenUsage(responseOpenAI, availableCredits, userId, numbe
 
 
 
-const runAnalyzeImage = async (base64Image,phone,name) => {
+export const runAnalyzeImage = async (base64Image,phone,name) => {
 
     const userId = phone; // Usando el teléfono como userId por consistencia
     const numberPhone = phone;
@@ -122,7 +123,7 @@ const runAnalyzeImage = async (base64Image,phone,name) => {
     }
 };
 
-const run = async (name, history, question, phone,imageBase64 = "") => {
+export const run = async (name, history, question, phone,imageBase64 = "") => {
     const userId = phone; // Usando el teléfono como userId por consistencia
     const numberPhone = phone;
 
@@ -181,7 +182,7 @@ const run = async (name, history, question, phone,imageBase64 = "") => {
     }
 };
 
-const runDetermine = async (history, phone) => {
+export const runDetermine = async (history, phone) => {
     const userId = phone;
     const numberPhone = phone;
     const name = '';
@@ -239,7 +240,7 @@ const runDetermine = async (history, phone) => {
 
 
 // Función para analizar el texto extraído
-const runAnalyzeText = async (text) => {
+export const runAnalyzeText = async (text) => {
     const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [
@@ -252,7 +253,7 @@ const runAnalyzeText = async (text) => {
 }
 
 // Función para analizar el texto extraído
-const runUpdatePromptServicesProduct = async (text) => {
+export const runUpdatePromptServicesProduct = async (text) => {
     const whatsappPrompt = await promptGetWhatsapp()
 
     const response = await openai.chat.completions.create({
@@ -280,5 +281,3 @@ const runUpdatePromptServicesProduct = async (text) => {
 
     return response.choices[0].message.content;
 }
-
-module.exports = { run, runDetermine, runAnalyzeText, runAnalyzeImage, runUpdatePromptServicesProduct };

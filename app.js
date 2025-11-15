@@ -1,19 +1,14 @@
-const { createBot, createProvider, createFlow, addKeyword, EVENTS } = require('@bot-whatsapp/bot');
-const { writeFileSync, unlinkSync } = require('fs');
-const QRPortalWeb = require('@bot-whatsapp/portal');
-const BaileysProvider = require('@bot-whatsapp/provider/baileys');
-const MockAdapter = require('@bot-whatsapp/database/mock');
-const { voice } = require('./flow/voice');
-const { media } = require('./flow/media');
-const { menu } = require('./flow/menu');
-const { chatbot } = require('./flow/chatbot');
-const { vendor } = require('./flow/vendor');
-const { welcome } = require('./flow/welcome');
-require('dotenv').config();
-// ... existing code ...
-const { defaultLogger } = require('./helpers/cloudWatchLogger');
-const express = require("express");
-const { postWhatsappConversation } = require('./services/aws');
+import { createBot, createProvider, createFlow } from '@builderbot/bot';
+import { writeFileSync, unlinkSync } from 'fs';
+import { BaileysProvider as Provider } from '@builderbot/provider-baileys'
+import { MemoryDB as Database } from '@builderbot/bot'
+import { voice } from './flow/voice.js';
+import { media } from './flow/media.js';
+import { chatbot } from './flow/chatbot.js';
+import 'dotenv/config';
+import { defaultLogger } from './helpers/cloudWatchLogger.js';
+import express from 'express';
+import { postWhatsappConversation } from './services/aws/index.js';
 const app = express();
 
 const main = async () => {
@@ -23,30 +18,22 @@ const main = async () => {
         app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
         // Inicializar adaptadores
-        const adapterDB = new MockAdapter();
+        const adapterDB = new Database()
         const adapterFlow = createFlow([
-            voice,
-            chatbot,
-            media
+           chatbot, media, voice
         ]);
-        const adapterProvider = createProvider(BaileysProvider, {
-            // Estas opciones son ignoradas por algunas versiones,
-            // pero si tu versión las soporta, evitarán full sync:
-            readIncomingMessages: true,
-            syncFullHistory: false,
-            shouldSyncHistoryMessage: false,
-        });
+        const adapterProvider = createProvider(Provider);
 
         // Crear instancia del bot
-        const bot = createBot({
-            flow: adapterFlow,
-            provider: adapterProvider,
-            database: adapterDB,
-        });
+        const { handleCtx, httpServer } = await createBot({
+        flow: adapterFlow,
+        provider: adapterProvider,
+        database: adapterDB,
+    })
 
         // Iniciar portal web para código QR
         const port = process.env.PORT || 3000;
-        QRPortalWeb({ port });
+        httpServer(port)
 
         defaultLogger.info('Bot iniciado', { port });
 

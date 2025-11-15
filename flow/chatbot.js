@@ -1,6 +1,6 @@
-const { addKeyword, EVENTS } = require('@bot-whatsapp/bot')
-const { run, runDetermine, runUpdatePromptServicesProduct } = require('../services/openai')
-const {
+import { addKeyword, EVENTS } from '@builderbot/bot'
+import { run, runUpdatePromptServicesProduct } from '../services/openai/index.js'
+import {
     getWhatsapp,
     putWhatsapp,
     whatsappStatus,
@@ -12,9 +12,9 @@ const {
     promptGetWhatsapp,
     getWhatsappConversation,
     postWhatsappConversation
-} = require('../services/aws')
+} from '../services/aws/index.js'
 
-const { defaultLogger } = require('../helpers/cloudWatchLogger');
+import { defaultLogger } from '../helpers/cloudWatchLogger.js'
 
 // Constantes de configuración
 let TIMEOUT_MS = 45000 // Tiempo de espera aleatorio entre 45-60 segundos
@@ -34,13 +34,12 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
  * Flujo principal del chatbot que maneja la conversación por defecto
  * cuando no hay coincidencias con palabras clave
  */
-const chatbot = addKeyword(EVENTS.WELCOME)
+export const chatbot = addKeyword(EVENTS.WELCOME)
     // Primera acción: Validación inicial y procesamiento de mensajes
     .addAction(async (ctx, { state, endFlow, flowDynamic }) => {
         try {
-
             const userId = ctx.key.remoteJid
-            const numberPhone = ctx.from
+            const numberPhone = ctx.host
             const name = ctx?.pushName ?? ''
 
             if(hasOnlyEmoji(ctx.body)){
@@ -189,7 +188,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
         } catch (error) {
             defaultLogger.error('Error en primera acción chatbot flujo', {
                 userId: ctx.key.remoteJid,
-                numberPhone: ctx.from,
+                numberPhone: ctx.host,
                 name: ctx?.pushName,
                 error: error.message,
                 stack: error.stack,
@@ -206,7 +205,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
             await provider.vendor.sendPresenceUpdate('composing', ctx.key.remoteJid)
 
             const userId = ctx.key.remoteJid
-            const numberPhone = ctx.from
+            const numberPhone = ctx.host
             const name = ctx?.pushName ?? ''
 
             defaultLogger.info('Iniciando segunda acción', {
@@ -437,7 +436,7 @@ const chatbot = addKeyword(EVENTS.WELCOME)
         } catch (error) {
             defaultLogger.error('Error en segunda acción chatbot flujo', {
                 userId: ctx.key.remoteJid,
-                numberPhone: ctx.from,
+                numberPhone: ctx.host,
                 name: ctx?.pushName,
                 error: error.message,
                 stack: error.stack,
@@ -533,4 +532,3 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserO
     return false
 }
 
-module.exports = { chatbot }

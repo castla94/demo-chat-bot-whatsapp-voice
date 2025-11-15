@@ -1,6 +1,7 @@
-const winston = require('winston');
-const WinstonCloudWatch = require('winston-cloudwatch');
-require('dotenv').config();
+import winston from 'winston';
+import WinstonCloudWatch from 'winston-cloudwatch';
+import dotenv from 'dotenv';
+dotenv.config();
 
 // Crear una función para obtener el nombre del stream
 const getLogStreamName = (prefix = 'app') => {
@@ -11,7 +12,7 @@ const getLogStreamName = (prefix = 'app') => {
 };
 
 // Crear el logger con opciones configurables
-const createCloudWatchLogger = (options = {}) => {
+export const createCloudWatchLogger = (options = {}) => {
     const {
         logGroupName = 'whatsapp-bot-logs',
         prefix = 'app',
@@ -51,9 +52,4 @@ const createCloudWatchLogger = (options = {}) => {
 };
 
 // Crear una instancia por defecto
-const defaultLogger = createCloudWatchLogger();
-
-module.exports = {
-    createCloudWatchLogger,
-    defaultLogger
-}; 
+export const defaultLogger = createCloudWatchLogger();

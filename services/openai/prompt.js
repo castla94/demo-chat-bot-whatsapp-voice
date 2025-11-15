@@ -1,6 +1,8 @@
 // Importar función para obtener prompts de WhatsApp desde AWS
-const { promptGetWhatsapp } = require('../aws');
-const { defaultLogger } = require('../../helpers/cloudWatchLogger.js');
+import { promptGetWhatsapp } from '../aws/index.js';
+import { defaultLogger } from '../../helpers/cloudWatchLogger.js';
+
+
 
 // Base de datos estática con el menú de productos y precios
 const DATE_BASE = [
@@ -85,7 +87,7 @@ DIRECTRICES PARA RESPONDER AL CLIENTE:
  * @param {string} question - Pregunta o consulta del cliente
  * @returns {Promise<string>} Prompt personalizado
  */
-const generatePrompt = async (name,question) => {
+export const generatePrompt = async (name,question) => {
     const getWhatsappPrompt = await promptGetWhatsapp();
     if(getWhatsappPrompt && getWhatsappPrompt.prompt){
         defaultLogger.info('Obteniendo prompt desde base de datos', {
@@ -101,9 +103,6 @@ const generatePrompt = async (name,question) => {
  * Genera el prompt para determinar el producto de interés
  * @returns {string} Prompt para determinar producto
  */
-const generatePromptDetermine = () => {
+export const generatePromptDetermine = () => {
     return PROMPT_DETERMINE
 }
-
-// Exportar funciones para uso en otros módulos
-module.exports = { generatePrompt,generatePromptDetermine };
