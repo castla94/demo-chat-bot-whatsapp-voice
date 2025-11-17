@@ -36,21 +36,13 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
  */
 const chatbot = addKeyword(EVENTS.WELCOME)
     // Primera acción: Validación inicial y procesamiento de mensajes
-    .addAction(async (ctx, { state, endFlow, flowDynamic }) => {
+    .addAction(async (ctx, { state, endFlow, flowDynamic, provider }) => {
         try {
             
             const userId = ctx.key.remoteJid
             const numberPhone = ctx.from
             const name = ctx?.pushName ?? ''
 
-             defaultLogger.info('CTX INFO', {
-                    userId,
-                    numberPhone,
-                    name,
-                    action: 'CTX',
-                    file: 'chatbot.js',
-                    ctx
-            })
 
             if(hasOnlyEmoji(ctx.body)){
                 defaultLogger.info('No responder usuario envio solo Emoji', {
@@ -419,9 +411,15 @@ const chatbot = addKeyword(EVENTS.WELCOME)
                 }
 
                 for (const chunk of chunks) {
-                    await flowDynamic([
-                        {body: chunk.replace(/^[\n]+/, '').trim()}
-                    ])
+                     // Enviar el mensaje usando el número y el mensaje desde el body
+                    const isProxy = numberPhone.length > 11;
+                    if(isProxy){
+                        await provider.sendText(userId, chunk.replace(/^[\n]+/, '').trim());
+                    }else{
+                        await flowDynamic([
+                            {body: chunk.replace(/^[\n]+/, '').trim()}
+                        ])
+                    }
                     await sleep(2000)
                 }
 
