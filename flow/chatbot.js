@@ -38,10 +38,19 @@ const chatbot = addKeyword(EVENTS.WELCOME)
     // Primera acción: Validación inicial y procesamiento de mensajes
     .addAction(async (ctx, { state, endFlow, flowDynamic }) => {
         try {
-
+            
             const userId = ctx.key.remoteJid
             const numberPhone = ctx.from
             const name = ctx?.pushName ?? ''
+
+             defaultLogger.info('CTX INFO', {
+                    userId,
+                    numberPhone,
+                    name,
+                    action: 'CTX',
+                    file: 'chatbot.js',
+                    ctx
+            })
 
             if(hasOnlyEmoji(ctx.body)){
                 defaultLogger.info('No responder usuario envio solo Emoji', {
