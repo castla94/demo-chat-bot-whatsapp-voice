@@ -25,7 +25,7 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
 
 // Function to check premium plan status
-const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
+const checkPremiumPlan = async (userId, numberPhone, name, provider) => {
     const isPremiun = await getWhatsappPlanPremiun()
     defaultLogger.info('Verificación de plan', {
         userId,
@@ -43,9 +43,9 @@ const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
             action: 'without_plan',
             file: 'media.js'
         })
-        await flowDynamic([{
-            body: "Lo siento, no puedo procesar tu imagen. Por favor, envíame por texto lo que necesitas consultar."
-        }])
+    
+        await provider.sendMessage(numberPhone,"Lo siento, no puedo procesar tu imagen. Por favor, envíame por texto lo que necesitas consultar.", { media: null})
+
         return true
     }
 
@@ -57,9 +57,7 @@ const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
             action: 'without_plan_pro',
             file: 'media.js'
         })
-        await flowDynamic([{
-            body: "Lo siento, no puedo procesar tu imagen. Por favor, envíame por texto lo que necesitas consultar."
-        }])
+        await provider.sendMessage(numberPhone,"Lo siento, no puedo procesar tu imagen. Por favor, envíame por texto lo que necesitas consultar.", { media: null})
         return true
     }
 
@@ -67,7 +65,7 @@ const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
 }
 
 // Process alarms through dedicated method
-const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserOrIA) => {
+const processAlarm = async (ctx, numberPhone, name, provider, question, UserOrIA ) => {
     const hasAlarm = await regexAlarm(question)
     defaultLogger.info('Verificación de alarma', {
         userId: ctx.key.remoteJid,
@@ -95,6 +93,18 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserO
     return false
 }
 
+
+function extractNumber(ctx) {
+    const from = ctx.from
+    const remoteJid = ctx.key.remoteJid.split('@')[0]
+    const remoteJidAlt = ctx.key.remoteJidAlt.split('@')[0]
+
+    if (from && from.length <= 11) return from
+    if (remoteJidAlt && remoteJidAlt.length <= 11) return remoteJidAlt
+    if (remoteJid && remoteJid.length <= 11) return remoteJid
+    return from
+}
+
 /**
  * Flow para manejar eventos de medios (imágenes) enviados por el usuario
  * Procesa comprobantes de pago y notifica al vendedor
@@ -102,7 +112,7 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserO
 export const media = addKeyword(EVENTS.MEDIA)
     .addAction(async (ctx, { flowDynamic, endFlow, state, provider }) => {
         const userId = ctx.key.remoteJid
-        const numberPhone = ctx.host
+        const numberPhone = extractNumber(ctx)
         const name = ctx?.pushName ?? ''
 
         try {
@@ -204,12 +214,11 @@ export const media = addKeyword(EVENTS.MEDIA)
 
 
             // Check premium plan status
-            const shouldEndFlow = await checkPremiumPlan(userId, numberPhone, name, flowDynamic)
+            const shouldEndFlow = await checkPremiumPlan(userId, numberPhone, name, provider)
             if (shouldEndFlow) return endFlow()
 
-            await flowDynamic([{
-                body: "Dame un momento para revisar."
-            }])
+
+            await provider.sendMessage(numberPhone,"Dame un momento para revisar.", { media: null})
 
             // Procesar y guardar la imagen recibida
             const pathImg = await provider.saveFile(ctx, {path:`${process.cwd()}/media/`})
@@ -295,9 +304,7 @@ export const media = addKeyword(EVENTS.MEDIA)
             const chunks = response.split(/:\n\n|\n\n/)
 
             for (const chunk of chunks) {
-                await flowDynamic([{
-                    body: chunk.replace(/^[\n]+/, '').trim()
-                }])
+                await provider.sendMessage(numberPhone,chunk.replace(/^[\n]+/, '').trim(), { media: null})
                 await sleep(2000)
             }
 
@@ -336,7 +343,7 @@ export const media = addKeyword(EVENTS.MEDIA)
             })
 
             // Call the alarm processing method
-            const shouldEndFlowAlarm = await processAlarm(ctx, numberPhone, name, flowDynamic, response, "IA")
+            const shouldEndFlowAlarm = await processAlarm(ctx, numberPhone, name, provider, response, "IA")
             if (shouldEndFlowAlarm) return endFlow()
 
             fs.unlink(pathImg, (error) => {

@@ -30,16 +30,28 @@ const userTimeouts = {} // Timeouts por usuario
  */
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
+
+function extractNumber(ctx) {
+    const from = ctx.from
+    const remoteJid = ctx.key.remoteJid.split('@')[0]
+    const remoteJidAlt = ctx.key.remoteJidAlt.split('@')[0]
+
+    if (from && from.length <= 11) return from
+    if (remoteJidAlt && remoteJidAlt.length <= 11) return remoteJidAlt
+    if (remoteJid && remoteJid.length <= 11) return remoteJid
+    return from
+}
+
 /**
  * Flujo principal del chatbot que maneja la conversación por defecto
  * cuando no hay coincidencias con palabras clave
  */
 export const chatbot = addKeyword(EVENTS.WELCOME)
     // Primera acción: Validación inicial y procesamiento de mensajes
-    .addAction(async (ctx, { state, endFlow, flowDynamic }) => {
+    .addAction(async (ctx, { state, endFlow, flowDynamic, provider }) => {
         try {
             const userId = ctx.key.remoteJid
-            const numberPhone = ctx.key.remoteJid.split("@")[0]
+            const numberPhone = extractNumber(ctx)
             const name = ctx?.pushName ?? ''
 
 
@@ -164,7 +176,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 return endFlow()
             }
             // Call the alarm processing method
-            const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, ctx.body, "user")
+            const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, ctx.body, "user")
             if (shouldEndFlow) return endFlow()
 
             TIMEOUT_MS = Math.floor(Math.random() * (45000 - 30000 + 1) + 30000) // Tiempo de espera aleatorio entre 30-45 segundos
@@ -216,7 +228,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             await provider.vendor.sendPresenceUpdate('composing', ctx.key.remoteJid)
 
             const userId = ctx.key.remoteJid
-            const numberPhone = ctx.key.remoteJid.split("@")[0]
+            const numberPhone = extractNumber(ctx)
             const name = ctx?.pushName ?? ''
 
             defaultLogger.info('Iniciando segunda acción', {
@@ -359,7 +371,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 }
 
                 // Call the alarm processing method
-                const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, response, "IA")
+                const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, response, "IA")
                 if (shouldEndFlow) return endFlow()
 
                 // Procesar orden si se detecta
@@ -416,7 +428,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                     })*/
                     // Get welcome message 
                     const whatsappPrompt = await promptGetWhatsapp()
-                    await displayFile(whatsappPrompt,flowDynamic)
+                    await displayFile(whatsappPrompt,provider)
                 }
 
                 for (const chunk of chunks) {
@@ -460,15 +472,12 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
     })
 
 
-const displayFile = async (whatsappPrompt, flowDynamic) => {
+const displayFile = async (whatsappPrompt, provider) => {
     const hasValidMenuUrl = whatsappPrompt.url_menu &&
         whatsappPrompt.url_menu !== "" &&
         whatsappPrompt.url_menu !== "NA"
     if (hasValidMenuUrl) {
-        await flowDynamic([{
-            body: '.',
-            media: whatsappPrompt.url_menu
-        }])
+        await provider.sendMessage(numberPhone,".", { media: whatsappPrompt.url_menu })
     }
 }
 
@@ -497,7 +506,7 @@ function hasOnlyEmoji(str) {
   }
 
 // Process alarms through dedicated method
-const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserOrIA) => {
+const processAlarm = async (ctx, numberPhone, name, provider, question, UserOrIA) => {
     const hasAlarm = await regexAlarm(question)
     defaultLogger.info('Verificación de alarma', {
         userId: ctx.key.remoteJid,
@@ -529,11 +538,11 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserO
 
         const message = UserOrIA === "user" ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo." : question
 
-        await flowDynamic([{
-            body: alarmResponse
+        const responseMessage = alarmResponse
             ? message
             : "Lo sentimos, pero no tenemos personal disponible en este momento."
-        }])
+
+        await provider.sendMessage(numberPhone,responseMessage, { media: null})
 
         await putWhatsapp(numberPhone, name, false)
         return true

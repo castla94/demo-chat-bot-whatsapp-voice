@@ -20,7 +20,7 @@ import { defaultLogger } from '../helpers/cloudWatchLogger.js'
 
  
 // Function to check premium plan status
-const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
+const checkPremiumPlan = async (userId, numberPhone, name, provider) => {
     const isPremiun = await getWhatsappPlanPremiun()
     defaultLogger.info('Verificación de plan', {
         userId,
@@ -38,9 +38,9 @@ const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
             action: 'without_plan',
             file: 'voice.js'
         })
-        await flowDynamic([{
-            body: "Lo siento, no puedo procesar notas de voz en este momento. Por favor, escribe tu consulta en un mensaje de texto."
-        }])
+        
+        await provider.sendMessage(numberPhone,"Lo siento, no puedo procesar notas de voz en este momento. Por favor, escribe tu consulta en un mensaje de texto.", { media: null})
+
         return true
     }
     console.log("isPremiun",isPremiun)
@@ -52,13 +52,25 @@ const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
             action: 'without_plan_pro',
             file: 'voice.js'
         })
-        await flowDynamic([{
-            body: "Lo siento, no puedo procesar notas de voz en este momento. Por favor, escribe tu consulta en un mensaje de texto."
-        }])
+
+        await provider.sendMessage(numberPhone,"Lo siento, no puedo procesar notas de voz en este momento. Por favor, escribe tu consulta en un mensaje de texto.", { media: null})
+
         return true
     }
 
     return false
+}
+
+
+function extractNumber(ctx) {
+    const from = ctx.from
+    const remoteJid = ctx.key.remoteJid.split('@')[0]
+    const remoteJidAlt = ctx.key.remoteJidAlt.split('@')[0]
+
+    if (from && from.length <= 11) return from
+    if (remoteJidAlt && remoteJidAlt.length <= 11) return remoteJidAlt
+    if (remoteJid && remoteJid.length <= 11) return remoteJid
+    return from
 }
 
 /**
@@ -67,9 +79,9 @@ const checkPremiumPlan = async (userId, numberPhone, name, flowDynamic) => {
  */
 export const voice = addKeyword(EVENTS.VOICE_NOTE)
     // Primera acción: Validación inicial y análisis de intención
-    .addAction(async (ctx, { state, endFlow,flowDynamic }) => {
+    .addAction(async (ctx, { state, endFlow,flowDynamic, provider }) => {
         const userId = ctx.key.remoteJid
-        const numberPhone = ctx.host
+        const numberPhone = extractNumber(ctx)
         const name = ctx?.pushName ?? ''
 
         try {
@@ -145,7 +157,7 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             }
 
             // Check premium plan status
-            const shouldEndFlow = await checkPremiumPlan(userId, numberPhone, name, flowDynamic)
+            const shouldEndFlow = await checkPremiumPlan(userId, numberPhone, name, provider)
             if (shouldEndFlow) return endFlow()
 
             // Get current conversation history from state
@@ -191,7 +203,7 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
     .addAction(async (ctx, { flowDynamic, endFlow, state, provider }) => {
         const userId = ctx.key.remoteJid
         const name = ctx?.pushName ?? ''
-        const numberPhone = ctx.host
+        const numberPhone = extractNumber(ctx)
 
         try {
             // 1. Enviar estado "escribiendo"
@@ -291,14 +303,12 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             })
 
             if(transcribedText === "ERROR"){
-                await flowDynamic([{
-                    body: "Disculpa, no entendí tu mensaje. Por favor, puedes enviarlo de nuevo."
-                }])
+                await provider.sendMessage(numberPhone,"Disculpa, no entendí tu mensaje. Por favor, puedes enviarlo de nuevo.", { media: null})
                 return endFlow()
             }
 
             // Call the alarm processing method
-            const shouldEndFlow = await processAlarm(ctx, numberPhone, name, flowDynamic, transcribedText,transcribedText,"user")
+            const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, transcribedText,transcribedText,"user")
             if (shouldEndFlow) return endFlow()
 
             // Actualizar historial de conversación
@@ -330,7 +340,7 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             })
 
             // Call the alarm processing method
-            const shouldEndFlow2 = await processAlarm(ctx, numberPhone, name, flowDynamic, response,transcribedText,"IA")
+            const shouldEndFlow2 = await processAlarm(ctx, numberPhone, name, provider, response,transcribedText,"IA")
             if (shouldEndFlow2) return endFlow()
 
             // Procesar orden si se detecta
@@ -376,9 +386,7 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             const chunks = response.split(/:\n\n|\n\n/)
 
             for (const chunk of chunks) {
-                await flowDynamic([{
-                    body: chunk.replace(/^[\n]+/, '').trim()
-                }])
+                await provider.sendMessage(numberPhone,chunk.replace(/^[\n]+/, '').trim(), { media: null})
                 await setTimeout(2000)
             }
 
@@ -419,7 +427,7 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
 
 
     // Process alarms through dedicated method
-const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,message,UserOrIA) => {
+const processAlarm = async (ctx, numberPhone, name, provider, question,message,UserOrIA) => {
     const hasAlarm = await regexAlarm(question)
     defaultLogger.info('Verificación de alarma', {
         userId: ctx.key.remoteJid,
@@ -451,11 +459,9 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question,messag
 
         const messageFlow = UserOrIA === "user" ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo." : question
 
-        await flowDynamic([{
-            body: alarmResponse 
+        await provider.sendMessage(numberPhone,alarmResponse 
             ? messageFlow
-            : "Lo sentimos, pero no tenemos personal disponible en este momento."
-        }])
+            : "Lo sentimos, pero no tenemos personal disponible en este momento.", { media: null})
         
         await putWhatsapp(numberPhone, name, false)
         return true
