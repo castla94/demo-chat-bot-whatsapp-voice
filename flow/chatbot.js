@@ -39,8 +39,19 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
     .addAction(async (ctx, { state, endFlow, flowDynamic }) => {
         try {
             const userId = ctx.key.remoteJid
-            const numberPhone = ctx.host
+            const numberPhone = ctx.key.remoteJid.split("@")[0]
             const name = ctx?.pushName ?? ''
+
+
+            defaultLogger.info('Ctx received', {
+                    userId,
+                    numberPhone,
+                    name,
+                    messageBody: 'ctx',
+                    ctx: ctx,
+                    action: 'ctx_received',
+                    file: 'chatbot.js'
+            })
 
             if(hasOnlyEmoji(ctx.body)){
                 defaultLogger.info('No responder usuario envio solo Emoji', {
@@ -205,7 +216,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             await provider.vendor.sendPresenceUpdate('composing', ctx.key.remoteJid)
 
             const userId = ctx.key.remoteJid
-            const numberPhone = ctx.host
+            const numberPhone = ctx.key.remoteJid.split("@")[0]
             const name = ctx?.pushName ?? ''
 
             defaultLogger.info('Iniciando segunda acción', {
@@ -409,9 +420,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 }
 
                 for (const chunk of chunks) {
-                    await flowDynamic([
-                        {body: chunk.replace(/^[\n]+/, '').trim()}
-                    ])
+                    await provider.sendMessage(numberPhone, chunk.replace(/^[\n]+/, '').trim(), { media: null })
                     await sleep(2000)
                 }
 
@@ -500,7 +509,7 @@ const processAlarm = async (ctx, numberPhone, name, flowDynamic, question, UserO
         file: 'chatbot.js'
     })
 
-    if (hasAlarm || numberPhone.length >= 15) {
+    if (hasAlarm) {
 
         if (UserOrIA === "user") {
             await postWhatsappConversation(numberPhone, question, "");
