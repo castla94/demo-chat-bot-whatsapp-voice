@@ -103,7 +103,7 @@ function extractNumber(ctx) {
     if (remoteJidAlt && remoteJidAlt.length <= 11) return remoteJidAlt
     if (remoteJid && remoteJid.length <= 11) return remoteJid
     return from
-}
+} 
 
 /**
  * Flow para manejar eventos de medios (imágenes) enviados por el usuario

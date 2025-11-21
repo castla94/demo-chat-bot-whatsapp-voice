@@ -30,7 +30,7 @@ const userTimeouts = {} // Timeouts por usuario
  */
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
-
+ 
 function extractNumber(ctx) {
     const from = ctx.from
     const remoteJid = ctx.key.remoteJid.split('@')[0]

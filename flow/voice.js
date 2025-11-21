@@ -72,7 +72,7 @@ function extractNumber(ctx) {
     if (remoteJid && remoteJid.length <= 11) return remoteJid
     return from
 }
-
+ 
 /**
  * Flujo para manejar notas de voz
  * Procesa el audio, lo convierte a texto y genera respuestas
