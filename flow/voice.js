@@ -63,14 +63,25 @@ const checkPremiumPlan = async (userId, numberPhone, name, provider) => {
 
 
 function extractNumber(ctx) {
-    const from = ctx.from
-    const remoteJid = ctx.key.remoteJid.split('@')[0]
-    const remoteJidAlt = ctx.key.remoteJidAlt.split('@')[0]
+    try {
+        const from = ctx.from
+        const remoteJid = ctx?.key?.remoteJid ? ctx.key.remoteJid.split('@')[0] : ''
+        const remoteJidAlt = ctx?.key?.remoteJidAlt ? ctx.key.remoteJidAlt.split('@')[0] : ''
 
-    if (from && from.length <= 11) return from
-    if (remoteJidAlt && remoteJidAlt.length <= 11) return remoteJidAlt
-    if (remoteJid && remoteJid.length <= 11) return remoteJid
-    return from
+        if (from && from.length <= 11) return from
+        if (remoteJidAlt && remoteJidAlt.length <= 11) return remoteJidAlt
+        if (remoteJid && remoteJid.length <= 11) return remoteJid
+        return from
+    } catch (error) {
+        defaultLogger.error('Error extrayendo número', {
+            error: error.message,
+            stack: error.stack,
+            context: ctx,
+            action: 'extract_number_error',
+            file: 'chatbot.js'
+        })
+        return ctx.from
+    }
 }
  
 /**

@@ -30,16 +30,27 @@ const userTimeouts = {} // Timeouts por usuario
  */
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
- 
+
 function extractNumber(ctx) {
-    const from = ctx.from
-    const remoteJid = ctx.key.remoteJid.split('@')[0]
-    const remoteJidAlt = ctx.key.remoteJidAlt.split('@')[0]
- 
-    if (from && from.length <= 11) return from
-    if (remoteJidAlt && remoteJidAlt.length <= 11) return remoteJidAlt
-    if (remoteJid && remoteJid.length <= 11) return remoteJid
-    return from
+    try {
+        const from = ctx.from
+        const remoteJid = ctx?.key?.remoteJid ? ctx.key.remoteJid.split('@')[0] : ''
+        const remoteJidAlt = ctx?.key?.remoteJidAlt ? ctx.key.remoteJidAlt.split('@')[0] : ''
+
+        if (from && from.length <= 11) return from
+        if (remoteJidAlt && remoteJidAlt.length <= 11) return remoteJidAlt
+        if (remoteJid && remoteJid.length <= 11) return remoteJid
+        return from
+    } catch (error) {
+        defaultLogger.error('Error extrayendo número', {
+            error: error.message,
+            stack: error.stack,
+            context: ctx,
+            action: 'extract_number_error',
+            file: 'chatbot.js'
+        })
+        return ctx.from
+    }
 }
 
 /**
