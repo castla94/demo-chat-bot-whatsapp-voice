@@ -35,7 +35,7 @@ function extractNumber(ctx) {
     const from = ctx.from
     const remoteJid = ctx.key.remoteJid.split('@')[0]
     const remoteJidAlt = ctx.key.remoteJidAlt.split('@')[0]
-
+ 
     if (from && from.length <= 11) return from
     if (remoteJidAlt && remoteJidAlt.length <= 11) return remoteJidAlt
     if (remoteJid && remoteJid.length <= 11) return remoteJid
