@@ -384,7 +384,6 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 // Call the alarm processing method
                 const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, response, "IA")
                 if (shouldEndFlow) return endFlow()
-
                 // Procesar orden si se detecta
                 if (response.toLowerCase().includes("datos recibidos")) {
 
@@ -439,7 +438,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                     })*/
                     // Get welcome message 
                     const whatsappPrompt = await promptGetWhatsapp()
-                    await displayFile(whatsappPrompt,provider)
+                    await displayFile(whatsappPrompt,provider,numberPhone)
                 }
 
                 for (const chunk of chunks) {
@@ -483,12 +482,22 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
     })
 
 
-const displayFile = async (whatsappPrompt, provider) => {
+const displayFile = async (whatsappPrompt, provider,numberPhone) => {
+    try{
     const hasValidMenuUrl = whatsappPrompt.url_menu &&
         whatsappPrompt.url_menu !== "" &&
         whatsappPrompt.url_menu !== "NA"
     if (hasValidMenuUrl) {
-        await provider.sendMessage(numberPhone,".", { media: whatsappPrompt.url_menu })
+        await provider.sendMessage(numberPhone, "", { media: whatsappPrompt.url_menu })
+    }
+    } catch (error) {
+        defaultLogger.error('Error en displayFile', {
+            numberPhone: numberPhone,
+            error: error.message,
+            stack: error.stack,
+            action: 'displayFile_error',
+            file: 'chatbot.js'
+        })
     }
 }
 

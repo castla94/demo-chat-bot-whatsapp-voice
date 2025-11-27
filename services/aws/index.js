@@ -2,6 +2,7 @@ import axios from 'axios';
 import { defaultLogger } from '../../helpers/cloudWatchLogger.js';
 import dotenv from 'dotenv';
 dotenv.config();
+import { runAnalyzeText } from '../openai/index.js';
 
 // Constantes para configuración
 const BASE_URL = 'https://c0jkurvt19.execute-api.us-east-1.amazonaws.com/DEV';
@@ -314,8 +315,6 @@ export const putWhatsappOrderConfirmation = async (name, phone, message, status)
   ].join('');
   
   const order_number = `${formattedDate}-${phone}`;
-
-  const { runAnalyzeText } = require('../openai');
 
   // Analizar y estandarizar el mensaje de la orden
   try {
