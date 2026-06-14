@@ -442,7 +442,11 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 }
 
                 for (const chunk of chunks) {
-                    await provider.sendMessage(numberPhone, chunk.replace(/^[\n]+/, '').trim(), { media: null })
+                    if(numberPhone.length <= 11){
+                        await provider.sendMessage(numberPhone, chunk.replace(/^[\n]+/, '').trim(), { media: null })
+                    }else{
+                        await flowDynamic(chunk.replace(/^[\n]+/, '').trim())
+                    }
                     await sleep(2000)
                 }
 
