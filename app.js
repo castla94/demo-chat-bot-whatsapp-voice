@@ -55,8 +55,12 @@ const main = async () => {
 
             try {
 
-                // Enviar el mensaje usando el número y el mensaje desde el body
-                await adapterProvider.sendText(`${phoneNumber}@c.us`, message);
+                if(phoneNumber.includes('@')){
+                    await adapterProvider.sendText(phoneNumber, message);
+                }else{
+                    // Enviar el mensaje usando el número y el mensaje desde el body
+                    await adapterProvider.sendText(`${phoneNumber}@c.us`, message);
+                }
 
                 defaultLogger.info('Mensaje Manual Enviado', {
                     phoneNumber,
