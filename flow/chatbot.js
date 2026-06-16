@@ -387,7 +387,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 // Procesar orden si se detecta
                 if (response.toLowerCase().includes("datos recibidos")) {
 
-                    const whatsappPrompt = await promptGetWhatsapp();
+                    const whatsappPrompt = await promptGetWhatsapp(combinedMessages);
                     if (whatsappPrompt.products_dynamic) {
                         const updatePrompt = await runUpdatePromptServicesProduct(response);
                         defaultLogger.info('Prompt actualizado', {
@@ -437,7 +437,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                         file: 'chatbot.js'
                     })*/
                     // Get welcome message 
-                    const whatsappPrompt = await promptGetWhatsapp()
+                    const whatsappPrompt = await promptGetWhatsapp(ctx.body.toLowerCase().trim())
                     await displayFile(whatsappPrompt,provider,numberPhone)
                 }
 

@@ -357,7 +357,7 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             // Procesar orden si se detecta
             if (response.toLowerCase().includes("datos recibidos")) {
 
-                const whatsappPrompt = await promptGetWhatsapp();
+                const whatsappPrompt = await promptGetWhatsapp(transcribedText);
                 if(whatsappPrompt.products_dynamic){
                         const updatePrompt = await runUpdatePromptServicesProduct(response);
                         defaultLogger.info('Prompt actualizado', {

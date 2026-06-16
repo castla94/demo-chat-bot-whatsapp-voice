@@ -254,7 +254,7 @@ export const runAnalyzeText = async (text) => {
 
 // Función para analizar el texto extraído
 export const runUpdatePromptServicesProduct = async (text) => {
-    const whatsappPrompt = await promptGetWhatsapp()
+    const whatsappPrompt = await promptGetWhatsapp(text)
 
     const response = await openai.chat.completions.create({
         model: "gpt-4o-mini",

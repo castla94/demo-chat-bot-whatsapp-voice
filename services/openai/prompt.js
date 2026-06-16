@@ -88,7 +88,7 @@ DIRECTRICES PARA RESPONDER AL CLIENTE:
  * @returns {Promise<string>} Prompt personalizado
  */
 export const generatePrompt = async (name,question) => {
-    const getWhatsappPrompt = await promptGetWhatsapp();
+    const getWhatsappPrompt = await promptGetWhatsapp(question);
     if(getWhatsappPrompt && getWhatsappPrompt.prompt){
         defaultLogger.info('Obteniendo prompt desde base de datos', {
             action: 'get_prompt_from_db',
