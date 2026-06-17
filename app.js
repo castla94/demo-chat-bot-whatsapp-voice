@@ -11,6 +11,33 @@ import express from 'express';
 import { postWhatsappConversation } from './services/aws/index.js';
 
 const app = express();
+const MIME_EXTENSION_MAP = {
+    'application/pdf': 'pdf',
+    'application/msword': 'doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+    'application/vnd.ms-excel': 'xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+    'text/plain': 'txt',
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png'
+};
+
+const getFileExtensionFromBase64 = (base64Media, type) => {
+    const mimeMatch = /^data:([^;]+);base64,/i.exec(base64Media ?? '');
+    const mimeType = mimeMatch?.[1]?.toLowerCase();
+
+    if (mimeType && MIME_EXTENSION_MAP[mimeType]) {
+        return MIME_EXTENSION_MAP[mimeType];
+    }
+
+    return type === 'imagen' ? 'jpg' : 'pdf';
+};
+
+const buildTempFilePath = (prefix, extension) => {
+    const safeTimestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    return `temp/${prefix}_${safeTimestamp}.${extension}`;
+};
 
 const main = async () => {
     try {
@@ -109,15 +136,17 @@ const main = async () => {
                 let  filePath = '';
                 // Paso 2: guardar archivo temporal
                 if(type == 'imagen'){
+                    const fileExtension = getFileExtensionFromBase64(base64Media, type);
                     // Paso 2: guardar archivo temporal
-                    filePath = 'temp/imagen_' + new Date().toISOString() + '';
+                    filePath = buildTempFilePath('imagen', fileExtension);
                     writeFileSync(filePath, base64Data, 'base64');
                     await adapterProvider.sendImage(`${phoneNumber}@c.us`, filePath, message);
 
                 }
                 if(type == 'file'){
+                    const fileExtension = getFileExtensionFromBase64(base64Media, type);
                     // Paso 2: guardar archivo temporal
-                    filePath = 'temp/file_' + new Date().toISOString() + '';
+                    filePath = buildTempFilePath('file', fileExtension);
                     writeFileSync(filePath, base64Data, 'base64');
                     await adapterProvider.sendFile(`${phoneNumber}@c.us`, filePath);
                     if(message!==''){
