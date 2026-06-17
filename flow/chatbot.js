@@ -420,6 +420,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                         action: 'order_processing',
                         file: 'chatbot.js'
                     })
+                    await putWhatsapp(numberPhone, name, false)
                 }
                 
                 // Enviar respuesta en chunks
