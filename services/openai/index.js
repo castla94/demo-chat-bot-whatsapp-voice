@@ -219,7 +219,7 @@ export const run = async (name, history, question, phone,imageBase64 = "") => {
 
         const prompt = await generatePrompt(name, question);
         const classification = await classifyIntent(question);
-        const modelSelected = classification.requires_strong_model ? "gpt-4o" : "gpt-4o-mini";
+        const modelSelected = classification?.requires_strong_model ? "gpt-4o" : "gpt-4o-mini";
         defaultLogger.info('Modelo seleccionado para consulta', {
             userId,
             numberPhone,
