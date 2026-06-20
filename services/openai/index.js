@@ -126,67 +126,86 @@ export const runAnalyzeImage = async (base64Image,phone,name) => {
 
 
 async function classifyIntent(question) {
-  const apiKey = process.env.OPENAI_API_KEY;
+    const fallbackClassification = {
+        intent: "other",
+        requires_strong_model: false
+    };
 
-  const payload = {
-    model: "gpt-4o-mini",
-    input: [
-      {
-        role: "system",
-        content: [{
-          type: "input_text",
-          text: `
-Clasifica el mensaje.
+    const normalizeClassification = (classification) => {
+        const allowedIntents = ["availability", "reservation", "other"];
+        const intent = allowedIntents.includes(classification?.intent)
+            ? classification.intent
+            : "other";
 
-Categorias:
-- availability
-- reservation
-- pricing
-- faq
-- catalog
-- human
-- other
+        return {
+            intent,
+            requires_strong_model: Boolean(classification?.requires_strong_model)
+        };
+    };
 
-Responde SOLO JSON:
+    try {
+        const response = await openai.chat.completions.create({
+            model: "gpt-4o-mini",
+            temperature: 0,
+            messages: [
+                {
+                    role: "system",
+                    content:
+                        "Clasifica la intención del mensaje del usuario. " +
+                        "Si pregunta por disponibilidad, horarios o agenda usa 'availability'. " +
+                        "Si quiere reservar, agendar usa 'reservation'. " +
+                        "Si no calza claramente, usa 'other'. " +
+                        "Marca requires_strong_model en true solo cuando el mensaje sea ambiguo, complejo o requiera mayor razonamiento."
+                },
+                {
+                    role: "user",
+                    content: question
+                }
+            ],
+            response_format: {
+                type: "json_schema",
+                json_schema: {
+                    name: "intent_classification",
+                    strict: true,
+                    schema: {
+                        type: "object",
+                        additionalProperties: false,
+                        properties: {
+                            intent: {
+                                type: "string",
+                                enum: ["availability", "reservation", "other"]
+                            },
+                            requires_strong_model: {
+                                type: "boolean"
+                            }
+                        },
+                        required: ["intent", "requires_strong_model"]
+                    }
+                }
+            }
+        });
 
-{
-  "intent":"availability",
-  "requires_strong_model":true
-}
-`
-        }]
-      },
-      {
-        role: "user",
-        content: [{
-          type: "input_text",
-          text: question
-        }]
-      }
-    ],
-    text: {
-      format: { type: "text" }
-    },
-    temperature: 0
-  };
+        const rawContent = response.choices?.[0]?.message?.content ?? "";
 
-  const response = await global.fetch(
-    "https://api.openai.com/v1/responses",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(payload)
+        if (!rawContent) {
+            defaultLogger.warn('classifyIntent devolvió contenido vacío', {
+                question,
+                action: 'classify_intent_empty_response',
+                file: 'openai/index.js'
+            });
+            return fallbackClassification;
+        }
+
+        return normalizeClassification(JSON.parse(rawContent));
+    } catch (error) {
+        defaultLogger.warn('Error en classifyIntent, usando fallback', {
+            question,
+            error: error.message,
+            action: 'classify_intent_fallback',
+            file: 'openai/index.js'
+        });
+        return fallbackClassification;
     }
-  );
-
-  const data = await response.json();
-
-  return JSON.parse(
-    data.output?.[0]?.content?.[0]?.text || "{}"
-  );
 }
 
 
