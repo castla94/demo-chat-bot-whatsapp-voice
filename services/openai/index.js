@@ -152,7 +152,7 @@ export const run = async (name, history, question, phone,imageBase64 = "") => {
 
         const prompt = await generatePrompt(name, question);
         const response = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
+            model: "gpt-4o",
             messages: [
                 { role: "system", content: prompt },
                 ...history
