@@ -123,6 +123,73 @@ export const runAnalyzeImage = async (base64Image,phone,name) => {
     }
 };
 
+
+
+async function classifyIntent(question) {
+  const apiKey = process.env.OPENAI_API_KEY;
+
+  const payload = {
+    model: "gpt-4o-mini",
+    input: [
+      {
+        role: "system",
+        content: [{
+          type: "input_text",
+          text: `
+Clasifica el mensaje.
+
+Categorias:
+- availability
+- reservation
+- pricing
+- faq
+- catalog
+- human
+- other
+
+Responde SOLO JSON:
+
+{
+  "intent":"availability",
+  "requires_strong_model":true
+}
+`
+        }]
+      },
+      {
+        role: "user",
+        content: [{
+          type: "input_text",
+          text: question
+        }]
+      }
+    ],
+    text: {
+      format: { type: "text" }
+    },
+    temperature: 0
+  };
+
+  const response = await global.fetch(
+    "https://api.openai.com/v1/responses",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(payload)
+    }
+  );
+
+  const data = await response.json();
+
+  return JSON.parse(
+    data.output?.[0]?.content?.[0]?.text || "{}"
+  );
+}
+
+
 export const run = async (name, history, question, phone,imageBase64 = "") => {
     const userId = phone; // Usando el teléfono como userId por consistencia
     const numberPhone = phone;
@@ -151,8 +218,20 @@ export const run = async (name, history, question, phone,imageBase64 = "") => {
         }
 
         const prompt = await generatePrompt(name, question);
+        const classification = await classifyIntent(question);
+        const modelSelected = classification.requires_strong_model ? "gpt-4o" : "gpt-4o-mini";
+        defaultLogger.info('Modelo seleccionado para consulta', {
+            userId,
+            numberPhone,
+            name,
+            modelSelected,
+            classification,
+            action: 'model_selection',
+            file: 'openai/index.js'
+        });
+
         const response = await openai.chat.completions.create({
-            model: "gpt-4o",
+            model: modelSelected,
             messages: [
                 { role: "system", content: prompt },
                 ...history
