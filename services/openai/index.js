@@ -90,7 +90,7 @@ export const runAnalyzeImage = async (base64Image,phone,name) => {
         }
 
         const response = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
+            model: "gpt-4.1-mini",
             messages: [
                 {
                     role: "user",
@@ -145,7 +145,7 @@ async function classifyIntent(question) {
 
     try {
         const response = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
+            model: "gpt-4.1-mini",
             temperature: 0,
             messages: [
                 {
@@ -238,7 +238,7 @@ export const run = async (name, history, question, phone,imageBase64 = "") => {
 
         const prompt = await generatePrompt(name, question);
         const classification = await classifyIntent(question);
-        const modelSelected = classification?.requires_strong_model ? "gpt-4o" : "gpt-4o-mini";
+        const modelSelected = classification?.requires_strong_model ? "gpt-4o" : "gpt-4.1-mini";
         defaultLogger.info('Modelo seleccionado para consulta', {
             userId,
             numberPhone,
@@ -308,7 +308,7 @@ export const runDetermine = async (history, phone) => {
 
         const prompt = generatePromptDetermine();
         const response = await openai.chat.completions.create({
-            model: "gpt-4o-mini",
+            model: "gpt-4.1-mini",
             messages: [
                 { role: "system", content: prompt },
                 ...history
@@ -340,7 +340,7 @@ export const runDetermine = async (history, phone) => {
 // Función para analizar el texto extraído
 export const runAnalyzeText = async (text) => {
     const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+        model: "gpt-4.1-mini",
         messages: [
             { role: "system", content: "Analiza el texto de este mensaje y ajustalo a un formato estándar donde solo tomes en cuenta la informacion capturada del usuario" },
             { role: "user", content: `${text}` },
@@ -355,7 +355,7 @@ export const runUpdatePromptServicesProduct = async (text) => {
     const whatsappPrompt = await promptGetWhatsapp(text)
 
     const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+        model: "gpt-4.1-mini",
         messages: [
             { role: "system", content: "Analiza y actualiza la información en prompt_servicio_productos con los nuevos datos de actualizacion_servicio_productos. " +
                 "Actualiza los siguientes aspectos:\n" +
