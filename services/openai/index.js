@@ -126,8 +126,9 @@ export const runAnalyzeImage = async (base64Image,phone,name) => {
 
 
 async function classifyIntent(question) {
+    const apiKey = process.env.OPENAI_API_KEY;
     const fallbackClassification = {
-        intent: "other",
+        intent: "availability",
         requires_strong_model: false
     };
 
@@ -135,7 +136,7 @@ async function classifyIntent(question) {
         const allowedIntents = ["availability", "reservation", "other"];
         const intent = allowedIntents.includes(classification?.intent)
             ? classification.intent
-            : "other";
+            : fallbackClassification.intent;
 
         return {
             intent,
@@ -143,60 +144,117 @@ async function classifyIntent(question) {
         };
     };
 
+    defaultLogger.info('Iniciando classifyIntent', {
+        question,
+        action: 'classify_intent_start',
+        file: 'openai/index.js'
+    });
+
+    if (hasDateLikeReference(question)) {
+        return {
+            intent: "availability",
+            requires_strong_model: true
+        };
+    }
+
+    const payload = {
+        model: "gpt-4.1-mini",
+        input: [
+            {
+                role: "system",
+                content: [{
+                    type: "input_text",
+                    text: `
+Clasifica la intención del mensaje del usuario.
+Si pregunta por disponibilidad, horarios, agenda, o envía una fecha usa "availability".
+Si quiere reservar, agendar usa "reservation".
+Si no calza claramente, usa "other".
+Marca requires_strong_model en true solo cuando el mensaje sea ambiguo, complejo o requiera mayor razonamiento.
+IMPORTANTE: si el usuario incluye cualquier fecha o referencia temporal en cualquier formato, SIEMPRE clasifica como "availability" y "requires_strong_model": true.
+
+Considera como fecha o referencia temporal cualquiera de estos ejemplos:
+- 2026-06-26
+- 26/06/2026
+- 26-06-2026
+- 26 de junio
+- viernes 26
+- próximo viernes
+- manana
+- hoy
+- pasado manana
+- este fin de semana
+- junio
+
+Categorias:
+- availability
+- reservation
+- other
+
+Responde SOLO JSON:
+
+{
+  "intent":"availability",
+  "requires_strong_model":true
+}
+`
+                }]
+            },
+            {
+                role: "user",
+                content: [{
+                    type: "input_text",
+                    text: question
+                }]
+            }
+        ],
+        text: {
+            format: { type: "text" }
+        },
+        temperature: 0
+    };
+
     try {
-        const response = await openai.chat.completions.create({
-            model: "gpt-4.1-mini",
-            temperature: 0,
-            messages: [
-                {
-                    role: "system",
-                    content:
-                        "Clasifica la intención del mensaje del usuario. " +
-                        "Si pregunta por disponibilidad, horarios o agenda usa 'availability'. " +
-                        "Si quiere reservar, agendar usa 'reservation'. " +
-                        "Si no calza claramente, usa 'other'. " +
-                        "Marca requires_strong_model en true solo cuando el mensaje sea ambiguo, complejo o requiera mayor razonamiento."
+        const response = await global.fetch(
+            "https://api.openai.com/v1/responses",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${apiKey}`
                 },
-                {
-                    role: "user",
-                    content: question
-                }
-            ],
-            response_format: {
-                type: "json_schema",
-                json_schema: {
-                    name: "intent_classification",
-                    strict: true,
-                    schema: {
-                        type: "object",
-                        additionalProperties: false,
-                        properties: {
-                            intent: {
-                                type: "string",
-                                enum: ["availability", "reservation", "other"]
-                            },
-                            requires_strong_model: {
-                                type: "boolean"
-                            }
-                        },
-                        required: ["intent", "requires_strong_model"]
-                    }
+                body: JSON.stringify(payload)
+            }
+        );
+
+        const data = await response.json();
+        const rawText = String(data.output?.[0]?.content?.[0]?.text || "").trim();
+
+        try {
+            return normalizeClassification(JSON.parse(rawText || "{}"));
+        } catch {
+            const normalizedText = rawText
+                .replace(/^```json\s*/i, "")
+                .replace(/^```\s*/i, "")
+                .replace(/\s*```$/i, "")
+                .trim();
+
+            const jsonMatch = normalizedText.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+                try {
+                    return normalizeClassification(JSON.parse(jsonMatch[0]));
+                } catch (error) {
+                    defaultLogger.warn('classifyIntent parse_error', {
+                        question,
+                        message: error?.message || "",
+                        rawText,
+                        action: 'classify_intent_parse_error',
+                        file: 'openai/index.js'
+                    });
                 }
             }
-        });
 
-        const rawContent = response.choices?.[0]?.message?.content ?? "";
-
-        if (!rawContent) {
-            defaultLogger.warn('classifyIntent devolvió contenido vacío', {
-                question,
-                action: 'classify_intent_empty_response',
-                file: 'openai/index.js'
-            });
             return fallbackClassification;
         }
-
-        return normalizeClassification(JSON.parse(rawContent));
     } catch (error) {
         defaultLogger.warn('Error en classifyIntent, usando fallback', {
             question,
@@ -206,6 +264,26 @@ async function classifyIntent(question) {
         });
         return fallbackClassification;
     }
+}
+
+function hasDateLikeReference(question) {
+    const text = String(question || "").toLowerCase().trim();
+
+    if (!text) {
+        return false;
+    }
+
+    const patterns = [
+        /\b\d{4}-\d{1,2}-\d{1,2}\b/,
+        /\b\d{1,2}[/-]\d{1,2}([/-]\d{2,4})?\b/,
+        /\b\d{1,2}\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)(\s+de\s+\d{4})?\b/,
+        /\b(lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo)\s+\d{1,2}\b/,
+        /\b(hoy|manana|mañana|ayer|pasado manana|pasado mañana|proximo|próximo|este|semana proxima|semana próxima|fin de semana|mes que viene|mes proximo|mes próximo)\b/,
+        /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b/,
+        /\b(lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo)\b/
+    ];
+
+    return patterns.some((pattern) => pattern.test(text));
 }
 
 
