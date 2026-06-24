@@ -442,6 +442,8 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                     await displayFile(whatsappPrompt,provider,numberPhone)
                 }
 
+                
+
                 for (const chunk of chunks) {
                     if(numberPhone.length <= 11){
                         await provider.sendMessage(numberPhone, chunk.replace(/^[\n]+/, '').trim(), { media: null })
@@ -547,9 +549,9 @@ const processAlarm = async (ctx, numberPhone, name, provider, question, UserOrIA
 
         if (UserOrIA === "user") {
             await postWhatsappConversation(numberPhone, question, "");
-        } else {
+        } /*else {
             await postWhatsappConversation(numberPhone, "", question);
-        }
+        }*/
         
         const alarmResponse = await putWhatsappEmailVendor(numberPhone, name, ctx.body)
         defaultLogger.info('Procesamiento de alarma', {
