@@ -116,6 +116,30 @@ function extractNumber(ctx) {
     }
 }
 
+function extractMediaCaption(ctx) {
+    const candidates = [
+        ctx?.body,
+        ctx?.caption,
+        ctx?.message?.imageMessage?.caption,
+        ctx?.message?.videoMessage?.caption,
+        ctx?.message?.extendedTextMessage?.text,
+        ctx?.msg?.caption,
+        ctx?.msg?.body,
+        ctx?.msg?.imageMessage?.caption,
+        ctx?.msg?.message?.imageMessage?.caption,
+        ctx?.message?.documentMessage?.caption
+    ];
+
+    for (const candidate of candidates) {
+        const value = String(candidate || '').trim();
+        if (value) {
+            return value;
+        }
+    }
+
+    return '';
+}
+
 /**
  * Flow para manejar eventos de medios (imágenes) enviados por el usuario
  * Procesa comprobantes de pago y notifica al vendedor
@@ -125,6 +149,7 @@ export const media = addKeyword(EVENTS.MEDIA)
         const userId = ctx.key.remoteJid
         const numberPhone = extractNumber(ctx)
         const name = ctx?.pushName ?? ''
+        const mediaCaption = extractMediaCaption(ctx)
 
         try {
 
@@ -135,6 +160,7 @@ export const media = addKeyword(EVENTS.MEDIA)
                 userId,
                 numberPhone,
                 name,
+                mediaCaption,
                 action: 'media_received',
                 timestamp: new Date().toISOString(),
                 file: 'media.js'
@@ -218,7 +244,7 @@ export const media = addKeyword(EVENTS.MEDIA)
                 })
                 const imageBuffer = fs.readFileSync(pathImg);
                 const base64Image = imageBuffer.toString('base64');
-                await postWhatsappConversation(numberPhone, "", "", base64Image,"imagen","user");
+                await postWhatsappConversation(numberPhone, mediaCaption, "", base64Image,"imagen","user");
 
                 return endFlow()
             }
@@ -227,9 +253,6 @@ export const media = addKeyword(EVENTS.MEDIA)
             // Check premium plan status
             const shouldEndFlow = await checkPremiumPlan(userId, numberPhone, name, provider)
             if (shouldEndFlow) return endFlow()
-
-
-            await provider.sendMessage(numberPhone,"Dame un momento para revisar.", { media: null})
 
             // Procesar y guardar la imagen recibida
             const pathImg = await provider.saveFile(ctx, {path:`${process.cwd()}/media/`})
@@ -290,9 +313,19 @@ export const media = addKeyword(EVENTS.MEDIA)
             }
 
             const newHistory = (state.getMyState()?.history ?? [])
+            const questionParts = [];
 
-            const question = `Te envio la imagen con la informacion solicitada: *${responseImage.text}*\n\n. 
-            IMPORTANTE : confirmo que la informacion es correcta.`
+            if (mediaCaption) {
+                questionParts.push(`El usuario envio esta imagen con el siguiente texto o caption: "${mediaCaption}".`);
+            }
+
+            if (responseImage?.text) {
+                questionParts.push(`Contenido detectado en la imagen: *${responseImage.text}*.`);
+            }
+
+            questionParts.push('IMPORTANTE: usa el caption del usuario como contexto principal y la imagen como apoyo para responder.');
+
+            const question = questionParts.join('\n\n')
 
             newHistory.push({
                 role: 'user',
@@ -315,8 +348,12 @@ export const media = addKeyword(EVENTS.MEDIA)
             const chunks = response.split(/:\n\n|\n\n/)
 
             for (const chunk of chunks) {
-                await provider.sendMessage(numberPhone,chunk.replace(/^[\n]+/, '').trim(), { media: null})
-                await sleep(2000)
+                if(numberPhone.length <= 11){
+                        await provider.sendMessage(numberPhone, chunk.replace(/^[\n]+/, '').trim(), { media: null })
+                    }else{
+                        await flowDynamic(chunk.replace(/^[\n]+/, '').trim())
+                    }
+                    await sleep(2000)
             }
 
             // Actualizar historial
@@ -389,4 +426,3 @@ export const media = addKeyword(EVENTS.MEDIA)
             await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
         }
     })
-
