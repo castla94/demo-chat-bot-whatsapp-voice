@@ -81,23 +81,33 @@ const main = async () => {
             }
 
             try {
+                const sendTarget = phoneNumber.includes('@')
+                    ? phoneNumber
+                    : `${phoneNumber}@s.whatsapp.net`;
+                const sendResult = await adapterProvider.sendText(sendTarget, message);
+                const providerAccepted = Boolean(sendResult?.key?.id);
 
-                if(phoneNumber.includes('@')){
-                    await adapterProvider.sendText(phoneNumber, message);
-                }else{
-                    // Enviar el mensaje usando el número y el mensaje desde el body
-                    await adapterProvider.sendText(`${phoneNumber}@c.us`, message);
-                }
-
-                defaultLogger.info('Mensaje Manual Enviado', {
+                defaultLogger.info('Mensaje manual procesado por provider', {
                     phoneNumber,
+                    sendTarget,
                     messageBody: message,
+                    providerAccepted,
+                    sendResultKeyId: sendResult?.key?.id || '',
+                    sendResultRemoteJid: sendResult?.key?.remoteJid || '',
+                    sendResultStatus: sendResult?.status,
                     timestamp: new Date().toISOString()
                 });
 
                 await postWhatsappConversation(phoneNumber, "", message,"","",'openia');
 
-                res.send({ data: "enviado" });
+                res.send({
+                    data: providerAccepted ? "enviado" : "procesado_sin_confirmacion",
+                    providerAccepted,
+                    sendTarget,
+                    messageId: sendResult?.key?.id || null,
+                    remoteJid: sendResult?.key?.remoteJid || null,
+                    status: sendResult?.status ?? null
+                });
             } catch (error) {
                 defaultLogger.error('Error al enviar el mensaje', {
                     phoneNumber,
