@@ -445,15 +445,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 
 
                 for (const chunk of chunks) {
-                    if(numberPhone.length <= 11){
-                        defaultLogger.info('Enviando chunk por provider.sendMessage', {
-                            numberPhone,
-                            numberPhoneLength: numberPhone.length,
-                            chunk: chunk.replace(/^[\n]+/, '').trim(),
-                            file: 'chatbot.js'
-                        })
-                        await provider.sendMessage(numberPhone, chunk.replace(/^[\n]+/, '').trim(), { media: null })
-                    }else{
+                   
                         defaultLogger.info('Enviando chunk por flowDynamic', {
                             numberPhone,
                             numberPhoneLength: numberPhone.length,
@@ -461,7 +453,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                             file: 'chatbot.js'
                         })
                         await flowDynamic(chunk.replace(/^[\n]+/, '').trim())
-                    }
+                    
                     await sleep(2000)
                 }
 
