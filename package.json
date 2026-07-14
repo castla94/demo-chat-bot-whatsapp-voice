@@ -5,7 +5,6 @@
   "main": "app.js",
   "type": "module",
   "scripts": {
-    "prestart": "npx eslint . --no-ignore",
     "pre-copy": "cd .. && npm run  copy.lib base-baileys-memory",
     "start": "node app.js"
   },

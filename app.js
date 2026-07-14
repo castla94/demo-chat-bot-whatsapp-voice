@@ -50,7 +50,7 @@ const main = async () => {
         const adapterFlow = createFlow([
            chatbot, media, voice
         ]);
-        const adapterProvider = createProvider(Provider,{ version: [2, 3000, 1033927531]});
+        const adapterProvider = createProvider(Provider,{ version: [2, 3000, 1043085068]});
 
         // Crear instancia del bot
         const { handleCtx, httpServer } = await createBot({
