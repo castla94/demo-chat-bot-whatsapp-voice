@@ -53,19 +53,6 @@ function extractNumber(ctx) {
     }
 }
 
-function extractSendTarget(ctx) {
-    return String(
-        ctx?.key?.remoteJidAlt ||
-        ctx?.key?.remoteJid ||
-        ctx?.from ||
-        ''
-    ).trim()
-}
-
-function shouldUseDirectProviderSend(sendTarget) {
-    return sendTarget !== '' && !sendTarget.includes('@g.us')
-}
-
 /**
  * Flujo principal del chatbot que maneja la conversación por defecto
  * cuando no hay coincidencias con palabras clave
@@ -76,17 +63,12 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
         try {
             const userId = ctx.key.remoteJid
             const numberPhone = extractNumber(ctx)
-            const sendTarget = extractSendTarget(ctx)
             const name = ctx?.pushName ?? ''
 
 
             defaultLogger.info('Ctx received', {
                     userId,
                     numberPhone,
-                    sendTarget,
-                    remoteJid: ctx?.key?.remoteJid,
-                    remoteJidAlt: ctx?.key?.remoteJidAlt,
-                    from: ctx?.from,
                     name,
                     messageBody: 'ctx',
                     ctx: ctx,
@@ -205,7 +187,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 return endFlow()
             }
             // Call the alarm processing method
-            const shouldEndFlow = await processAlarm(ctx, numberPhone, sendTarget, name, provider, ctx.body, "user")
+            const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, ctx.body, "user")
             if (shouldEndFlow) return endFlow()
 
             TIMEOUT_MS = Math.floor(Math.random() * (45000 - 30000 + 1) + 30000) // Tiempo de espera aleatorio entre 30-45 segundos
@@ -258,16 +240,11 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
 
             const userId = ctx.key.remoteJid
             const numberPhone = extractNumber(ctx)
-            const sendTarget = extractSendTarget(ctx)
             const name = ctx?.pushName ?? ''
 
             defaultLogger.info('Iniciando segunda acción', {
                 userId,
                 numberPhone,
-                sendTarget,
-                remoteJid: ctx?.key?.remoteJid,
-                remoteJidAlt: ctx?.key?.remoteJidAlt,
-                from: ctx?.from,
                 name,
                 messageBody: ctx.body,
                 action: 'second_action_start',
@@ -360,105 +337,98 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
 
             // Procesar mensajes acumulados
             userTimeouts[userId] = setTimeout(async () => {
-                try {
-                    const combinedMessages = userBuffers[userId].join(' ')
-                    userBuffers[userId] = [] // Limpiar buffer
+                const combinedMessages = userBuffers[userId].join(' ')
+                userBuffers[userId] = [] // Limpiar buffer
 
-                    const newHistory = (state.getMyState()?.history ?? [])
-                    newHistory.push({
-                        role: 'user',
-                        content: combinedMessages
-                    })
+                const newHistory = (state.getMyState()?.history ?? [])
+                newHistory.push({
+                    role: 'user',
+                    content: combinedMessages
+                })
 
-                    defaultLogger.info('Procesando mensajes acumulados', {
+                defaultLogger.info('Procesando mensajes acumulados', {
+                    userId,
+                    numberPhone,
+                    name,
+                    combinedMessages,
+                    history: newHistory,
+                    action: 'processing_messages',
+                    file: 'chatbot.js'
+                })
+
+                // Obtener respuesta del modelo
+                const response = await run(name, newHistory, combinedMessages, numberPhone)
+                defaultLogger.info('Respuesta del modelo obtenida', {
+                    userId,
+                    numberPhone,
+                    name,
+                    modelResponse: response,
+                    action: 'model_response',
+                    file: 'chatbot.js'
+                })
+
+                // Check if the last message from assistant matches the current response
+                if (newHistory.length >= 2 && 
+                    newHistory[newHistory.length - 2].role === 'assistant' && 
+                    newHistory[newHistory.length - 2].content === response) {
+                    defaultLogger.info('Mensaje duplicado OpenIA, ignorando...', {
                         userId,
                         numberPhone,
-                        sendTarget,
                         name,
-                        combinedMessages,
-                        history: newHistory,
-                        action: 'processing_messages',
+                        action: 'duplicate_message_openia',
                         file: 'chatbot.js'
                     })
+                    return endFlow()
+                }
 
-                    // Obtener respuesta del modelo
-                    const response = await run(name, newHistory, combinedMessages, numberPhone)
-                    defaultLogger.info('Respuesta del modelo obtenida', {
+                // Call the alarm processing method
+                const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, response, "IA")
+                if (shouldEndFlow) return endFlow()
+                // Procesar orden si se detecta
+                if (response.toLowerCase().includes("datos recibidos")) {
+
+                    const whatsappPrompt = await promptGetWhatsapp(combinedMessages);
+                    if (whatsappPrompt.products_dynamic) {
+                        const updatePrompt = await runUpdatePromptServicesProduct(response);
+                        defaultLogger.info('Prompt actualizado', {
+                            userId,
+                            numberPhone,
+                            name,
+                            updatePrompt,
+                            action: 'update_prompt_complete',
+                            file: 'chatbot.js'
+                        });
+
+                        const responseUpdateProductWhatsapp = await promptUpdateProductWhatsapp(updatePrompt);
+                        defaultLogger.info('Respuesta de actualización de producto prompt', {
+                            userId,
+                            numberPhone,
+                            name,
+                            responseUpdateProductWhatsapp,
+                            action: 'product_update_response',
+                            file: 'chatbot.js'
+                        });
+                    }
+
+                    const orderConfirmation = await putWhatsappOrderConfirmation(name, numberPhone, response, "pending_payment")
+                    defaultLogger.info('Orden procesada', {
                         userId,
                         numberPhone,
-                        sendTarget,
                         name,
-                        modelResponse: response,
-                        action: 'model_response',
+                        response,
+                        orderConfirmation,
+                        action: 'order_processing',
                         file: 'chatbot.js'
                     })
+                    await putWhatsapp(numberPhone, name, false)
+                }
+                
+                // Enviar respuesta en chunks
+                //const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
+                const chunks = response.split(/:\n\n|\n\n/)
 
-                    // Check if the last message from assistant matches the current response
-                    if (newHistory.length >= 2 && 
-                        newHistory[newHistory.length - 2].role === 'assistant' && 
-                        newHistory[newHistory.length - 2].content === response) {
-                        defaultLogger.info('Mensaje duplicado OpenIA, ignorando...', {
-                            userId,
-                            numberPhone,
-                            sendTarget,
-                            name,
-                            action: 'duplicate_message_openia',
-                            file: 'chatbot.js'
-                        })
-                        return endFlow()
-                    }
-
-                    // Call the alarm processing method
-                    const shouldEndFlow = await processAlarm(ctx, numberPhone, sendTarget, name, provider, response, "IA")
-                    if (shouldEndFlow) return endFlow()
-                    // Procesar orden si se detecta
-                    if (response.toLowerCase().includes("datos recibidos")) {
-
-                        const whatsappPrompt = await promptGetWhatsapp(combinedMessages);
-                        if (whatsappPrompt.products_dynamic) {
-                            const updatePrompt = await runUpdatePromptServicesProduct(response);
-                            defaultLogger.info('Prompt actualizado', {
-                                userId,
-                                numberPhone,
-                                sendTarget,
-                                name,
-                                updatePrompt,
-                                action: 'update_prompt_complete',
-                                file: 'chatbot.js'
-                            });
-
-                            const responseUpdateProductWhatsapp = await promptUpdateProductWhatsapp(updatePrompt);
-                            defaultLogger.info('Respuesta de actualización de producto prompt', {
-                                userId,
-                                numberPhone,
-                                sendTarget,
-                                name,
-                                responseUpdateProductWhatsapp,
-                                action: 'product_update_response',
-                                file: 'chatbot.js'
-                            });
-                        }
-
-                        const orderConfirmation = await putWhatsappOrderConfirmation(name, numberPhone, response, "pending_payment")
-                        defaultLogger.info('Orden procesada', {
-                            userId,
-                            numberPhone,
-                            sendTarget,
-                            name,
-                            response,
-                            orderConfirmation,
-                            action: 'order_processing',
-                            file: 'chatbot.js'
-                        })
-                        await putWhatsapp(numberPhone, name, false)
-                    }
-                    
-                    // Enviar respuesta en chunks
-                    //const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
-                    const chunks = response.split(/:\n\n|\n\n/)
-
-                    const greetings = ['hola', 'como esta', 'buenos dias', 'buenas tardes', 'buenas noches']
-                    if (greetings.some(greeting => ctx.body.toLowerCase().includes(greeting))) {
+                const greetings = ['hola', 'como esta', 'buenos dias', 'buenas tardes', 'buenas noches']
+                if (greetings.some(greeting => ctx.body.toLowerCase().includes(greeting))) {
                     /*await putWhatsapp(numberPhone, name, true)
                     defaultLogger.info('Usuario activado', {
                         userId,
@@ -468,70 +438,49 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                         file: 'chatbot.js'
                     })*/
                     // Get welcome message 
-                        const whatsappPrompt = await promptGetWhatsapp(ctx.body.toLowerCase().trim())
-                        await displayFile(whatsappPrompt, provider, sendTarget)
-                    }
-
-                    for (const chunk of chunks) {
-                        const cleanChunk = chunk.replace(/^[\n]+/, '').trim()
-                        if (shouldUseDirectProviderSend(sendTarget)) {
-                            defaultLogger.info('Enviando chunk por provider.sendMessage', {
-                                numberPhone,
-                                sendTarget,
-                                numberPhoneLength: numberPhone.length,
-                                chunk: cleanChunk,
-                                file: 'chatbot.js'
-                            })
-                            await provider.sendMessage(sendTarget, cleanChunk, { media: null })
-                            defaultLogger.info('Chunk enviado por provider.sendMessage', {
-                                numberPhone,
-                                sendTarget,
-                                numberPhoneLength: numberPhone.length,
-                                chunk: cleanChunk,
-                                file: 'chatbot.js'
-                            })
-                        } else {
-                            defaultLogger.info('Enviando chunk por flowDynamic', {
-                                numberPhone,
-                                sendTarget,
-                                numberPhoneLength: numberPhone.length,
-                                chunk: cleanChunk,
-                                file: 'chatbot.js'
-                            })
-                            await flowDynamic(cleanChunk)
-                        }
-                        await sleep(2000)
-                    }
-
-                    // Actualizar historial
-                    newHistory.push({
-                        role: 'assistant',
-                        content: response
-                    })
-
-                    // Eliminar los primeros 2 elementos
-                    // Comprobar si el array tiene más de 20 elementos
-                    if (newHistory.length > 20) {
-                        // Eliminar los primeros 2 elementos si tiene más de 20 elementos
-                        newHistory.splice(0, 2);
-                    }
-
-                    await state.update({ history: newHistory })
-                } catch (error) {
-                    defaultLogger.error('Error dentro del procesamiento diferido del chatbot', {
-                        userId,
-                        numberPhone,
-                        sendTarget,
-                        remoteJid: ctx?.key?.remoteJid,
-                        remoteJidAlt: ctx?.key?.remoteJidAlt,
-                        from: ctx?.from,
-                        name,
-                        messageBody: ctx.body,
-                        error: error.message,
-                        stack: error.stack,
-                        file: 'chatbot.js'
-                    })
+                    const whatsappPrompt = await promptGetWhatsapp(ctx.body.toLowerCase().trim())
+                    await displayFile(whatsappPrompt,provider,numberPhone)
                 }
+
+                
+
+                for (const chunk of chunks) {
+                    if(numberPhone.length <= 11){
+                        defaultLogger.info('Enviando chunk por provider.sendMessage', {
+                            numberPhone,
+                            numberPhoneLength: numberPhone.length,
+                            chunk: chunk.replace(/^[\n]+/, '').trim(),
+                            file: 'chatbot.js'
+                        })
+                        await provider.sendMessage(numberPhone, chunk.replace(/^[\n]+/, '').trim(), { media: null })
+                    }else{
+                        defaultLogger.info('Enviando chunk por flowDynamic', {
+                            numberPhone,
+                            numberPhoneLength: numberPhone.length,
+                            chunk: chunk.replace(/^[\n]+/, '').trim(),
+                            file: 'chatbot.js'
+                        })
+                        await flowDynamic(chunk.replace(/^[\n]+/, '').trim())
+                    }
+                    await sleep(2000)
+                }
+
+                // Actualizar historial
+                newHistory.push({
+                    role: 'assistant',
+                    content: response
+                })
+
+                // Eliminar los primeros 2 elementos
+                // Comprobar si el array tiene más de 20 elementos
+                if (newHistory.length > 20) {
+                    // Eliminar los primeros 2 elementos si tiene más de 20 elementos
+                    newHistory.splice(0, 2);
+                }
+
+                await state.update({ history: newHistory })
+
+                
             }, TIMEOUT_MS)
 
         } catch (error) {
@@ -552,17 +501,17 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
     })
 
 
-const displayFile = async (whatsappPrompt, provider, sendTarget) => {
+const displayFile = async (whatsappPrompt, provider,numberPhone) => {
     try{
     const hasValidMenuUrl = whatsappPrompt.url_menu &&
         whatsappPrompt.url_menu !== "" &&
         whatsappPrompt.url_menu !== "NA"
     if (hasValidMenuUrl) {
-        await provider.sendMessage(sendTarget, "", { media: whatsappPrompt.url_menu })
+        await provider.sendMessage(numberPhone, "", { media: whatsappPrompt.url_menu })
     }
     } catch (error) {
         defaultLogger.error('Error en displayFile', {
-            sendTarget,
+            numberPhone: numberPhone,
             error: error.message,
             stack: error.stack,
             action: 'displayFile_error',
@@ -596,7 +545,7 @@ function hasOnlyEmoji(str) {
   }
 
 // Process alarms through dedicated method
-const processAlarm = async (ctx, numberPhone, sendTarget, name, provider, question, UserOrIA) => {
+const processAlarm = async (ctx, numberPhone, name, provider, question, UserOrIA) => {
     const hasAlarm = await regexAlarm(question)
     defaultLogger.info('Verificación de alarma', {
         userId: ctx.key.remoteJid,
@@ -632,7 +581,7 @@ const processAlarm = async (ctx, numberPhone, sendTarget, name, provider, questi
             ? message
             : "Lo sentimos, pero no tenemos personal disponible en este momento."
 
-        await provider.sendMessage(sendTarget, responseMessage, { media: null})
+        await provider.sendMessage(numberPhone,responseMessage, { media: null})
 
         await putWhatsapp(numberPhone, name, false)
         return true
