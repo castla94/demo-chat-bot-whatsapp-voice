@@ -1,6 +1,7 @@
 import { createBot, createProvider, createFlow } from '@builderbot/bot';
 import { writeFileSync, unlinkSync } from 'fs';
-import { BaileysProvider as Provider } from 'aurik3-builderbot-baileys-custom'
+import { BaileysProvider as Provider } from '@builderbot/provider-baileys'
+//import { BaileysProvider as Provider } from 'aurik3-builderbot-baileys-custom'
 import { MemoryDB as Database } from '@builderbot/bot'
 import { voice } from './flow/voice.js';
 import { media } from './flow/media.js';
