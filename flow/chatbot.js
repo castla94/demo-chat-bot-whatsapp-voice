@@ -15,6 +15,7 @@ import {
 } from '../services/aws/index.js'
 
 import { defaultLogger } from '../helpers/cloudWatchLogger.js'
+import { getProfilePictureInfo } from '../helpers/whatsappProfile.js'
 
 // Constantes de configuración
 let TIMEOUT_MS = 45000 // Tiempo de espera aleatorio entre 45-60 segundos
@@ -64,12 +65,19 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             const userId = ctx.key.remoteJid
             const numberPhone = extractNumber(ctx)
             const name = ctx?.pushName ?? ''
-
+            const { profilePictureJid, profilePictureUrl } = await getProfilePictureInfo(ctx, provider, {
+                userId,
+                numberPhone,
+                name,
+                file: 'chatbot.js'
+            })
 
             defaultLogger.info('Ctx received', {
                     userId,
                     numberPhone,
                     name,
+                    profilePictureJid,
+                    profilePictureUrl,
                     messageBody: 'ctx',
                     ctx: ctx,
                     action: 'ctx_received',
@@ -164,7 +172,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             }
 
             // Validar estado individual del usuario
-            const userStatus = await getWhatsapp(numberPhone)
+            const userStatus = await getWhatsapp(numberPhone, { name, profilePictureUrl })
             defaultLogger.info('Estado del usuario', {
                 userId,
                 numberPhone,
@@ -241,6 +249,12 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             const userId = ctx.key.remoteJid
             const numberPhone = extractNumber(ctx)
             const name = ctx?.pushName ?? ''
+            const { profilePictureUrl } = await getProfilePictureInfo(ctx, provider, {
+                userId,
+                numberPhone,
+                name,
+                file: 'chatbot.js'
+            })
 
             defaultLogger.info('Iniciando segunda acción', {
                 userId,
@@ -300,7 +314,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             }
 
             // Validar estado individual del usuario
-            const userStatus = await getWhatsapp(numberPhone)
+            const userStatus = await getWhatsapp(numberPhone, { name, profilePictureUrl })
             defaultLogger.info('Estado del usuario', {
                 userId,
                 numberPhone,
@@ -312,7 +326,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
 
             // Actualizar estado del usuario si es nuevo
             if (!userStatus) {
-                const newUserStatus = await putWhatsapp(numberPhone, name, true)
+                const newUserStatus = await putWhatsapp(numberPhone, name, true, profilePictureUrl)
                 defaultLogger.info('Nuevo usuario registrado', {
                     userId,
                     numberPhone,

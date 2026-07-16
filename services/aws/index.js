@@ -181,13 +181,39 @@ export const getWhatsappWhitelist = async (phone) => {
  * @param {string} number - Número a consultar
  * @returns {Promise<Object|null>} Datos del número o null si hay error
  */
-export const getWhatsapp = async (number) => {
+export const getWhatsapp = async (number, options = {}) => {
   const endpoint = `${BASE_URL}/whatsapp`;
   const email = process.env.EMAIL_TOKEN;
+  const name = String(options?.name || '').trim();
+  const profilePictureUrl = String(options?.profilePictureUrl || '').trim();
 
   try {
     const response = await axios.get(endpoint, { params: { number, email } });
-    return response.data;
+    const userStatus = response.data;
+
+    if (userStatus && !userStatus.profile_picture && profilePictureUrl) {
+      defaultLogger.info('Completando profile_picture faltante en WhatsApp', {
+        number,
+        name: userStatus.name || name,
+        profilePictureUrl,
+        action: 'backfill_profile_picture',
+        file: 'aws/index.js'
+      });
+
+      await putWhatsapp(
+        number,
+        userStatus.name || name,
+        typeof userStatus.status === 'boolean' ? userStatus.status : true,
+        profilePictureUrl
+      );
+
+      return {
+        ...userStatus,
+        profile_picture: profilePictureUrl
+      };
+    }
+
+    return userStatus;
   } catch (error) {
     defaultLogger.error('Error obteniendo información de WhatsApp', {
       number,
@@ -207,7 +233,7 @@ export const getWhatsapp = async (number) => {
  * @param {boolean} status - Estado a establecer
  * @returns {Promise<Object|null>} Respuesta de la API o null si hay error
  */
-export const putWhatsapp = async (number, name, status) => {
+export const putWhatsapp = async (number, name, status, profilePicture = "") => {
   const endpoint = `${BASE_URL}/whatsapp`;
   const email = process.env.EMAIL_TOKEN;
 
@@ -216,7 +242,8 @@ export const putWhatsapp = async (number, name, status) => {
       email,
       name,
       number,
-      status
+      status,
+      ...(profilePicture ? { profile_picture: profilePicture } : {})
     });
     return response.data;
   } catch (error) {
@@ -224,6 +251,7 @@ export const putWhatsapp = async (number, name, status) => {
       number,
       name,
       status,
+      profilePicture,
       error: error.message,
       stack: error.stack,
       action: 'put_whatsapp_error',

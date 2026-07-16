@@ -17,6 +17,7 @@ import {
 } from '../services/aws/index.js'
 import { setTimeout } from 'timers/promises'
 import { defaultLogger } from '../helpers/cloudWatchLogger.js'
+import { getProfilePictureInfo } from '../helpers/whatsappProfile.js'
 
  
 // Function to check premium plan status
@@ -96,10 +97,17 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
         const name = ctx?.pushName ?? ''
 
         try {
+            const { profilePictureUrl } = await getProfilePictureInfo(ctx, provider, {
+                userId,
+                numberPhone,
+                name,
+                file: 'voice.js'
+            })
             defaultLogger.info('Iniciando procesamiento de nota de voz', {
                 userId,
                 numberPhone,
                 name,
+                profilePictureUrl,
                 action: 'voice_note_received',
                 file: 'voice.js'
             })
@@ -146,7 +154,7 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             }
 
             // Validar estado individual del usuario
-            const userStatus = await getWhatsapp(numberPhone)
+            const userStatus = await getWhatsapp(numberPhone, { name, profilePictureUrl })
             defaultLogger.info('Estado del usuario', {
                 userId,
                 numberPhone,
@@ -219,11 +227,18 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
         try {
             // 1. Enviar estado "escribiendo"
             await provider.vendor.sendPresenceUpdate('composing', ctx.key.remoteJid)
+            const { profilePictureUrl } = await getProfilePictureInfo(ctx, provider, {
+                userId,
+                numberPhone,
+                name,
+                file: 'voice.js'
+            })
 
             defaultLogger.info('Iniciando segunda acción de voz', {
                 userId,
                 numberPhone,
                 name,
+                profilePictureUrl,
                 action: 'second_action_start',
                 file: 'voice.js'
             })
@@ -268,7 +283,7 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
                 return endFlow()
             }
 
-            const userStatus = await getWhatsapp(numberPhone)
+            const userStatus = await getWhatsapp(numberPhone, { name, profilePictureUrl })
             defaultLogger.info('Estado del usuario', {
                 userId,
                 numberPhone,
@@ -280,7 +295,7 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
 
              // Actualizar estado del usuario si es nuevo
              if (!userStatus) {
-                const newUserStatus = await putWhatsapp(numberPhone, name, true)
+                const newUserStatus = await putWhatsapp(numberPhone, name, true, profilePictureUrl)
                 defaultLogger.info('Nuevo usuario registrado', {
                     userId,
                     numberPhone,

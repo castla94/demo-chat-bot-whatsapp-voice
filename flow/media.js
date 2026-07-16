@@ -14,6 +14,7 @@ import {
 import fs from "fs";
 import { defaultLogger } from '../helpers/cloudWatchLogger.js';
 import { processImage } from "../services/image/index.js";
+import { getProfilePictureInfo } from '../helpers/whatsappProfile.js';
 
 
 /**
@@ -155,12 +156,19 @@ export const media = addKeyword(EVENTS.MEDIA)
 
             // 1. Enviar estado "escribiendo"
             await provider.vendor.sendPresenceUpdate('composing', ctx.key.remoteJid)
+            const { profilePictureUrl } = await getProfilePictureInfo(ctx, provider, {
+                userId,
+                numberPhone,
+                name,
+                file: 'media.js'
+            })
 
             defaultLogger.info('Iniciando procesamiento de imagen', {
                 userId,
                 numberPhone,
                 name,
                 mediaCaption,
+                profilePictureUrl,
                 action: 'media_received',
                 timestamp: new Date().toISOString(),
                 file: 'media.js'
@@ -211,7 +219,7 @@ export const media = addKeyword(EVENTS.MEDIA)
             }
 
             // Validar estado individual del usuario
-            const userStatus = await getWhatsapp(numberPhone)
+            const userStatus = await getWhatsapp(numberPhone, { name, profilePictureUrl })
             defaultLogger.info('Estado del usuario', {
                 userId,
                 numberPhone,

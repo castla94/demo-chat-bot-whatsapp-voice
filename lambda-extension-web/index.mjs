@@ -405,7 +405,7 @@ const getWhatsapp = async (number, emailToken) => {
   }
 };
 
-const putWhatsapp = async (number, name, status, emailToken) => {
+const putWhatsapp = async (number, name, status, emailToken, profilePicture = "") => {
   const endpoint = `${BASE_URL}/whatsapp`;
 
   try {
@@ -413,13 +413,15 @@ const putWhatsapp = async (number, name, status, emailToken) => {
       email: emailToken,
       name,
       number,
-      status
+      status,
+      profile_picture: profilePicture
     });
   } catch (error) {
     logError('Error actualizando estado de WhatsApp', {
       number,
       name,
       status,
+      profilePicture,
       error: error.message,
       stack: error.stack,
       file: 'lambda-chatbot.mjs'
