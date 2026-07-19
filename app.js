@@ -87,7 +87,7 @@ const main = async () => {
                     await adapterProvider.sendText(phoneNumber, message);
                 }else{
                     // Enviar el mensaje usando el número y el mensaje desde el body
-                    await adapterProvider.sendText(`${phoneNumber}@c.us`, message);
+                    await adapterProvider.sendText(`${phoneNumber}@s.whatsapp.net`, message);
                 }
 
                 defaultLogger.info('Mensaje Manual Enviado', {
@@ -141,7 +141,7 @@ const main = async () => {
                     // Paso 2: guardar archivo temporal
                     filePath = buildTempFilePath('imagen', fileExtension);
                     writeFileSync(filePath, base64Data, 'base64');
-                    await adapterProvider.sendImage(`${phoneNumber}@c.us`, filePath, message);
+                    await adapterProvider.sendImage(`${phoneNumber}@s.whatsapp.net`, filePath, message);
 
                 }
                 if(type == 'file'){
@@ -149,9 +149,9 @@ const main = async () => {
                     // Paso 2: guardar archivo temporal
                     filePath = buildTempFilePath('file', fileExtension);
                     writeFileSync(filePath, base64Data, 'base64');
-                    await adapterProvider.sendFile(`${phoneNumber}@c.us`, filePath);
+                    await adapterProvider.sendFile(`${phoneNumber}@s.whatsapp.net`, filePath);
                     if(message!==''){
-                        await adapterProvider.sendText(`${phoneNumber}@c.us`, message);
+                        await adapterProvider.sendText(`${phoneNumber}@s.whatsapp.net`, message);
                     }
                 }
 
