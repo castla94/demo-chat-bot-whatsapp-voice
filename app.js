@@ -9,7 +9,7 @@ import { chatbot } from './flow/chatbot.js';
 import 'dotenv/config';
 import { defaultLogger } from './helpers/cloudWatchLogger.js';
 import express from 'express';
-import { getWhatsapp, postWhatsappConversation, putWhatsapp } from './services/aws/index.js';
+import { getWhatsapp, getWhatsappWhitelist, postWhatsappConversation, putWhatsapp } from './services/aws/index.js';
 
 const app = express();
 const MIME_EXTENSION_MAP = {
@@ -98,13 +98,27 @@ const processOwnTextMessage = async (message) => {
 
     const userStatus = await getWhatsapp(phoneNumber, { name });
 
-    defaultLogger.info('Estado del contacto para mensaje manual', {
+    const userStatusLabel = userStatus
+        ? (userStatus.status ? 'activo' : 'inactivo')
+        : 'sin_registro';
+
+    defaultLogger.info(`Estado del contacto para mensaje manual: ${userStatusLabel}`, {
         phoneNumber,
         name,
         userStatus,
         action: 'own_message_user_status_check',
         file: 'app.js'
     });
+
+    if (userStatusLabel === 'sin_registro') {
+        defaultLogger.info('Mensaje manual omitido por contacto sin registro', {
+            phoneNumber,
+            name,
+            action: 'own_message_skip_without_user_record',
+            file: 'app.js'
+        });
+        return;
+    }
 
     if (userStatus?.status) {
         await putWhatsapp(phoneNumber, userStatus.name || name, false);
@@ -115,6 +129,18 @@ const processOwnTextMessage = async (message) => {
             action: 'own_message_bot_disabled',
             file: 'app.js'
         });
+    }
+
+    const isWhitelisted = await getWhatsappWhitelist(phoneNumber);
+
+    if (isWhitelisted) {
+        defaultLogger.info('Conversación manual omitida por whitelist', {
+            phoneNumber,
+            name,
+            action: 'own_message_skip_conversation_whitelist',
+            file: 'app.js'
+        });
+        return;
     }
 
     await postWhatsappConversation(phoneNumber, "", text, "", "", 'openia');
