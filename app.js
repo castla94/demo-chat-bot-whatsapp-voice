@@ -9,7 +9,7 @@ import { chatbot } from './flow/chatbot.js';
 import 'dotenv/config';
 import { defaultLogger } from './helpers/cloudWatchLogger.js';
 import express from 'express';
-import { postWhatsappConversation } from './services/aws/index.js';
+import { getWhatsapp, postWhatsappConversation, putWhatsapp } from './services/aws/index.js';
 
 const app = express();
 const MIME_EXTENSION_MAP = {
@@ -40,6 +40,133 @@ const buildTempFilePath = (prefix, extension) => {
     return `temp/${prefix}_${safeTimestamp}.${extension}`;
 };
 
+const extractPhoneNumberFromOwnMessage = (message) => {
+    const jidCandidates = [
+        message?.key?.remoteJidAlt,
+        message?.key?.remoteJid
+    ];
+
+    for (const jid of jidCandidates) {
+        const rawValue = String(jid || '').trim();
+        if (!rawValue) {
+            continue;
+        }
+
+        const phoneNumber = rawValue.split('@')[0].replace(/\D/g, '');
+        if (phoneNumber) {
+            return phoneNumber;
+        }
+    }
+
+    return '';
+};
+
+const processOwnTextMessage = async (message) => {
+    const text = String(message?.message?.conversation || '').trim();
+
+    if (!text) {
+        return;
+    }
+
+    const phoneNumber = extractPhoneNumberFromOwnMessage(message);
+    if (!phoneNumber) {
+        defaultLogger.warn('No se pudo extraer el número del mensaje manual', {
+            remoteJid: message?.key?.remoteJid,
+            remoteJidAlt: message?.key?.remoteJidAlt,
+            action: 'own_message_phone_missing',
+            file: 'app.js'
+        });
+        return;
+    }
+
+    const name = String(
+        message?.pushName ||
+        message?.notifyName ||
+        message?.verifiedBizName ||
+        ''
+    ).trim();
+
+    defaultLogger.info('Mensaje manual detectado', {
+        phoneNumber,
+        name,
+        text,
+        remoteJid: message?.key?.remoteJid,
+        remoteJidAlt: message?.key?.remoteJidAlt,
+        action: 'own_message_detected',
+        file: 'app.js'
+    });
+
+    const userStatus = await getWhatsapp(phoneNumber, { name });
+
+    defaultLogger.info('Estado del contacto para mensaje manual', {
+        phoneNumber,
+        name,
+        userStatus,
+        action: 'own_message_user_status_check',
+        file: 'app.js'
+    });
+
+    if (userStatus?.status) {
+        await putWhatsapp(phoneNumber, userStatus.name || name, false);
+
+        defaultLogger.info('Bot desactivado por mensaje manual', {
+            phoneNumber,
+            name: userStatus.name || name,
+            action: 'own_message_bot_disabled',
+            file: 'app.js'
+        });
+    }
+
+    await postWhatsappConversation(phoneNumber, "", text, "", "", 'openia');
+};
+
+const attachOwnMessageListener = (adapterProvider) => {
+    let isListenerAttached = false;
+
+    const registerListener = () => {
+        if (isListenerAttached) {
+            console.log('Listener de mensajes propios ya registrado');
+            return;
+        }
+
+        const sock =
+            adapterProvider.vendor ??
+            adapterProvider.sock ??
+            adapterProvider.instance?.sock;
+
+        if (!sock?.ev?.on) {
+            console.warn('Socket de Baileys aun no disponible para escuchar eventos propios');
+            return;
+        }
+
+        sock.ev.on('messages.upsert', async ({ messages }) => {
+            for (const message of messages) {
+                try {
+                    if (!message?.message) continue;
+                    if (message?.key?.fromMe !== true) continue;
+
+                    await processOwnTextMessage(message);
+                } catch (error) {
+                    defaultLogger.error('Error procesando mensaje manual propio', {
+                        error: error.message,
+                        stack: error.stack,
+                        remoteJid: message?.key?.remoteJid,
+                        remoteJidAlt: message?.key?.remoteJidAlt,
+                        action: 'own_message_processing_error',
+                        file: 'app.js'
+                    });
+                }
+            }
+        });
+
+        isListenerAttached = true;
+    
+    };
+
+    registerListener();
+    adapterProvider.on('ready', registerListener);
+};
+
 const main = async () => {
     try {
         // aumentar el límite de JSON y URL-encoded
@@ -54,7 +181,7 @@ const main = async () => {
         const adapterProvider = createProvider(Provider,{ version: [2, 3000, 1043085068]});
 
         // Crear instancia del bot
-        const { handleCtx, httpServer } = await createBot({
+        const { httpServer } = await createBot({
         flow: adapterFlow,
         provider: adapterProvider,
         database: adapterDB,
@@ -65,6 +192,8 @@ const main = async () => {
         httpServer(port)
 
         defaultLogger.info('Bot iniciado', { port });
+
+        attachOwnMessageListener(adapterProvider);
 
         /**
          * Enviar mensaje con metodos propios del provider del bot
