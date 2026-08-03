@@ -147,46 +147,73 @@ const processOwnTextMessage = async (message) => {
 };
 
 const attachOwnMessageListener = (adapterProvider) => {
-    let isListenerAttached = false;
+    let activeSock = null;
 
-    const registerListener = () => {
-        if (isListenerAttached) {
-            console.log('Listener de mensajes propios ya registrado');
+    const onMessagesUpsert = async ({ messages }) => {
+        for (const message of messages || []) {
+            try {
+                if (!message?.message) continue;
+                if (message?.key?.fromMe !== true) continue;
+
+                await processOwnTextMessage(message);
+            } catch (error) {
+                defaultLogger.error('Error procesando mensaje manual propio', {
+                    error: error.message,
+                    stack: error.stack,
+                    remoteJid: message?.key?.remoteJid,
+                    remoteJidAlt: message?.key?.remoteJidAlt,
+                    action: 'own_message_processing_error',
+                    file: 'app.js'
+                });
+            }
+        }
+    };
+
+    const onConnectionUpdate = () => {
+        registerListener();
+    };
+
+    const detachFromSock = (sock) => {
+        if (!sock?.ev) return;
+        if (typeof sock.ev.off === 'function') {
+            sock.ev.off('messages.upsert', onMessagesUpsert);
+            sock.ev.off('connection.update', onConnectionUpdate);
             return;
         }
+        if (typeof sock.ev.removeListener === 'function') {
+            sock.ev.removeListener('messages.upsert', onMessagesUpsert);
+            sock.ev.removeListener('connection.update', onConnectionUpdate);
+        }
+    };
 
+    const attachToSock = (sock) => {
+        if (!sock?.ev?.on) {
+            return false;
+        }
+
+        if (activeSock === sock) {
+            return true;
+        }
+
+        if (activeSock) {
+            detachFromSock(activeSock);
+        }
+
+        sock.ev.on('messages.upsert', onMessagesUpsert);
+        sock.ev.on('connection.update', onConnectionUpdate);
+        activeSock = sock;
+        return true;
+    };
+
+    const registerListener = () => {
         const sock =
             adapterProvider.vendor ??
             adapterProvider.sock ??
             adapterProvider.instance?.sock;
 
-        if (!sock?.ev?.on) {
-            console.warn('Socket de Baileys aun no disponible para escuchar eventos propios');
+        if (!attachToSock(sock)) {
             return;
         }
-
-        sock.ev.on('messages.upsert', async ({ messages }) => {
-            for (const message of messages) {
-                try {
-                    if (!message?.message) continue;
-                    if (message?.key?.fromMe !== true) continue;
-
-                    await processOwnTextMessage(message);
-                } catch (error) {
-                    defaultLogger.error('Error procesando mensaje manual propio', {
-                        error: error.message,
-                        stack: error.stack,
-                        remoteJid: message?.key?.remoteJid,
-                        remoteJidAlt: message?.key?.remoteJidAlt,
-                        action: 'own_message_processing_error',
-                        file: 'app.js'
-                    });
-                }
-            }
-        });
-
-        isListenerAttached = true;
-    
     };
 
     registerListener();
@@ -204,7 +231,7 @@ const main = async () => {
         const adapterFlow = createFlow([
            chatbot, media, voice
         ]);
-        const adapterProvider = createProvider(Provider,{ version: [2, 3000, 1043085068]});
+        const adapterProvider = createProvider(Provider,{ version: [2, 3000, 1044344916]});
 
         // Crear instancia del bot
         const { httpServer } = await createBot({
@@ -219,7 +246,7 @@ const main = async () => {
 
         defaultLogger.info('Bot iniciado', { port });
 
-        attachOwnMessageListener(adapterProvider);
+        //attachOwnMessageListener(adapterProvider);
 
         /**
          * Enviar mensaje con metodos propios del provider del bot
