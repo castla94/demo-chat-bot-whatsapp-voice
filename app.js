@@ -246,7 +246,7 @@ const main = async () => {
 
         defaultLogger.info('Bot iniciado', { port });
 
-        //attachOwnMessageListener(adapterProvider);
+        attachOwnMessageListener(adapterProvider);
 
         /**
          * Enviar mensaje con metodos propios del provider del bot
