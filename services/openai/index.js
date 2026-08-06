@@ -9,6 +9,33 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
 });
 
+const isEnvTrue = (value) => {
+    const normalized = String(value || '').trim().toLowerCase();
+    return ['true', '1', 'yes', 'on', 'si', 's'].includes(normalized);
+};
+
+const ENABLE_MODEL_CLASSIFICATION = isEnvTrue(process.env.ENABLE_MODEL_CLASSIFICATION);
+const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
+
+const resolveModelSelection = async (question) => {
+    if (!ENABLE_MODEL_CLASSIFICATION) {
+        return {
+            modelSelected: DEFAULT_OPENAI_MODEL,
+            classification: null,
+            classificationEnabled: false
+        };
+    }
+
+    const classification = await classifyIntent(question);
+    const modelSelected = classification?.requires_strong_model ? "gpt-4o" : DEFAULT_OPENAI_MODEL;
+
+    return {
+        modelSelected,
+        classification,
+        classificationEnabled: true
+    };
+};
+
 export const calculateCostInDollars = (promptTokens, completionTokens) => {
     const inputCost = (promptTokens / 1000) * 0.00015;
     const outputCost = (completionTokens / 1000) * 0.0006;
@@ -278,7 +305,7 @@ function hasDateLikeReference(question) {
         /\b\d{1,2}[/-]\d{1,2}([/-]\d{2,4})?\b/,
         /\b\d{1,2}\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)(\s+de\s+\d{4})?\b/,
         /\b(lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo)\s+\d{1,2}\b/,
-        /\b(hoy|manana|mañana|ayer|pasado manana|pasado mañana|proximo|próximo|este|semana proxima|semana próxima|fin de semana|mes que viene|mes proximo|mes próximo)\b/,
+        /\b(hoy|manana|mañana|ayer|pasado manana|pasado mañana|proximo|próximo|semana proxima|semana próxima|fin de semana|mes que viene|mes proximo|mes próximo)\b/,
         /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|setiembre|octubre|noviembre|diciembre)\b/,
         /\b(lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo)\b/
     ];
@@ -315,14 +342,16 @@ export const run = async (name, history, question, phone,imageBase64 = "") => {
         }
 
         const prompt = await generatePrompt(name, question);
-        const classification = await classifyIntent(question);
-        const modelSelected = classification?.requires_strong_model ? "gpt-4o" : "gpt-4.1-mini";
+        const { modelSelected, classification, classificationEnabled } = await resolveModelSelection(question);
         defaultLogger.info('Modelo seleccionado para consulta', {
             userId,
             numberPhone,
             name,
             modelSelected,
             classification,
+            classificationEnabled,
+            defaultModel: DEFAULT_OPENAI_MODEL,
+            enableModelClassification: ENABLE_MODEL_CLASSIFICATION,
             action: 'model_selection',
             file: 'openai/index.js'
         });
