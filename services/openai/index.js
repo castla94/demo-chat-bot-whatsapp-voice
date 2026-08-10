@@ -17,6 +17,65 @@ const isEnvTrue = (value) => {
 const ENABLE_MODEL_CLASSIFICATION = isEnvTrue(process.env.ENABLE_MODEL_CLASSIFICATION);
 const DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
 
+const extractDate = (message) => {
+    const regex = /\b(\d{1,2})[\/-](\d{1,2})[\/-](\d{2}|\d{4})\b/;
+
+    const match = String(message || '').match(regex);
+
+    if (!match) {
+        return null;
+    }
+
+    let [, day, month, year] = match;
+
+    day = day.padStart(2, '0');
+    month = month.padStart(2, '0');
+
+    if (year.length === 2) {
+        year = `20${year}`;
+    }
+
+    const date = new Date(
+        Number(year),
+        Number(month) - 1,
+        Number(day)
+    );
+
+    const valid =
+        date.getFullYear() === Number(year) &&
+        date.getMonth() === Number(month) - 1 &&
+        date.getDate() === Number(day);
+
+    if (!valid) {
+        return null;
+    }
+
+    return {
+        original: match[0],
+        display: `${day}-${month}-${year}`,
+        iso: `${year}-${month}-${day}`
+    };
+};
+
+const resolveOpenAIQuestion = (modelSelected, question) => {
+    if (modelSelected !== 'gpt-4o') {
+        return {
+            finalQuestion: question,
+            dateExtracted: null,
+            dateApplied: false
+        };
+    }
+
+    const dateExtracted = extractDate(question);
+    const finalQuestion = dateExtracted ? dateExtracted.display : question;
+
+    return {
+        finalQuestion,
+        dateExtracted,
+        dateApplied: Boolean(dateExtracted)
+    };
+};
+
 const resolveModelSelection = async (question) => {
     if (!ENABLE_MODEL_CLASSIFICATION) {
         return {
@@ -343,15 +402,20 @@ export const run = async (name, history, question, phone,imageBase64 = "") => {
 
         const prompt = await generatePrompt(name, question);
         const { modelSelected, classification, classificationEnabled } = await resolveModelSelection(question);
+        const { finalQuestion, dateExtracted, dateApplied } = resolveOpenAIQuestion(modelSelected, question);
         defaultLogger.info('Modelo seleccionado para consulta', {
             userId,
             numberPhone,
             name,
+            originalQuestion: question,
+            finalQuestion,
             modelSelected,
             classification,
             classificationEnabled,
             defaultModel: DEFAULT_OPENAI_MODEL,
             enableModelClassification: ENABLE_MODEL_CLASSIFICATION,
+            dateExtracted,
+            dateApplied,
             action: 'model_selection',
             file: 'openai/index.js'
         });
@@ -360,7 +424,8 @@ export const run = async (name, history, question, phone,imageBase64 = "") => {
             model: modelSelected,
             messages: [
                 { role: "system", content: prompt },
-                ...history
+                ...history,
+                { role: "user", content: finalQuestion }
             ],
             temperature: 0,
             top_p: 1,
