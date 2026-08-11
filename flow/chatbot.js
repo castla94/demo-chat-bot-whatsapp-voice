@@ -458,26 +458,26 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
 
                 
 
-                for (const chunk of chunks) {
+                //for (const chunk of chunks) {
                     if(numberPhone.length <= 11){
                         defaultLogger.info('Enviando chunk por provider.sendMessage', {
                             numberPhone,
                             numberPhoneLength: numberPhone.length,
-                            chunk: chunk.replace(/^[\n]+/, '').trim(),
+                            chunk: response,
                             file: 'chatbot.js'
                         })
-                        await provider.sendMessage(numberPhone, chunk.replace(/^[\n]+/, '').trim(), { media: null })
+                        await provider.sendMessage(numberPhone, response, { media: null })
                     }else{
                         defaultLogger.info('Enviando chunk por flowDynamic', {
                             numberPhone,
                             numberPhoneLength: numberPhone.length,
-                            chunk: chunk.replace(/^[\n]+/, '').trim(),
+                            chunk: response,
                             file: 'chatbot.js'
                         })
-                        await flowDynamic(chunk.replace(/^[\n]+/, '').trim())
+                        await flowDynamic(response)
                     }
-                    await sleep(2000)
-                }
+                    //await sleep(2000)
+                //}
 
                 // Actualizar historial
                 newHistory.push({

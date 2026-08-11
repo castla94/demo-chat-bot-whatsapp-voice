@@ -355,14 +355,14 @@ export const media = addKeyword(EVENTS.MEDIA)
             //const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
             const chunks = response.split(/:\n\n|\n\n/)
 
-            for (const chunk of chunks) {
+           // for (const chunk of chunks) {
                 if(numberPhone.length <= 11){
-                        await provider.sendMessage(numberPhone, chunk.replace(/^[\n]+/, '').trim(), { media: null })
+                        await provider.sendMessage(numberPhone, response, { media: null })
                     }else{
-                        await flowDynamic(chunk.replace(/^[\n]+/, '').trim())
+                        await flowDynamic(response)
                     }
-                    await sleep(2000)
-            }
+                    //await sleep(2000)
+            //}
 
             // Actualizar historial
             newHistory.push({

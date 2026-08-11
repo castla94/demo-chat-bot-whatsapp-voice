@@ -411,10 +411,14 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             //const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
             const chunks = response.split(/:\n\n|\n\n/)
 
-            for (const chunk of chunks) {
-                await provider.sendMessage(numberPhone,chunk.replace(/^[\n]+/, '').trim(), { media: null})
-                await setTimeout(2000)
-            }
+            //for (const chunk of chunks) {
+                if(numberPhone.length <= 11){
+                    await provider.sendMessage(numberPhone, response, { media: null })
+                }else{
+                    await flowDynamic(response)
+                }
+                //await setTimeout(2000)
+            //}
 
             // Actualizar historial con respuesta
             newHistory.push({
