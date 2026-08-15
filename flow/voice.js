@@ -185,16 +185,8 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
                 action: 'user_status_check',
                 file: 'voice.js'
             })
-            // Actualizar usuario NUEVO (antes solo se hacía en segunda acción)
-            if (!userStatus) {
-                userStatus = await putWhatsapp(numberPhone, name, true, profilePictureUrl)
-                defaultLogger.info('Nuevo usuario registrado', {
-                    userId, numberPhone, name, newUserStatus: userStatus,
-                    action: 'new_user_registration',
-                    file: 'voice.js'
-                })
-            }
-            if (userStatus && !userStatus.status) {
+
+             if (userStatus && !userStatus.status) {
                 defaultLogger.info('Usuario desactivado', {
                     userId, numberPhone, name,
                     action: 'user_disabled_end_flow',
@@ -202,6 +194,17 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
                 })
                 return endFlow()
             }
+
+            // Actualizar usuario NUEVO (antes solo se hacía en segunda acción)
+            if (!userStatus) {
+                 await putWhatsapp(numberPhone, name, true, profilePictureUrl)
+                defaultLogger.info('Nuevo usuario registrado', {
+                    userId, numberPhone, name, newUserStatus: userStatus,
+                    action: 'new_user_registration',
+                    file: 'voice.js'
+                })
+            }
+           
 
             // Check premium plan
             const shouldEndPremium = await checkPremiumPlan(userId, numberPhone, name, provider)

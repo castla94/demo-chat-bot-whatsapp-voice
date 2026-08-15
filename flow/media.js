@@ -240,15 +240,7 @@ export const media = addKeyword(EVENTS.MEDIA)
                 action: 'user_status_check',
                 file: 'media.js'
             })
-            // Actualizar usuario NUEVO (igual que chatbot/voice ahora lo hacen)
-            if (!userStatus) {
-                userStatus = await putWhatsapp(numberPhone, name, true, profilePictureUrl)
-                defaultLogger.info('Nuevo usuario registrado', {
-                    userId, numberPhone, name, newUserStatus: userStatus,
-                    action: 'new_user_registration',
-                    file: 'media.js'
-                })
-            }
+
             if (userStatus && !userStatus.status) {
                 defaultLogger.info('Usuario desactivado', {
                     userId, numberPhone, name,
@@ -257,6 +249,17 @@ export const media = addKeyword(EVENTS.MEDIA)
                 })
                 return endFlow()
             }
+
+            // Actualizar usuario NUEVO (igual que chatbot/voice ahora lo hacen)
+            if (!userStatus) {
+                 await putWhatsapp(numberPhone, name, true, profilePictureUrl)
+                defaultLogger.info('Nuevo usuario registrado', {
+                    userId, numberPhone, name, newUserStatus: userStatus,
+                    action: 'new_user_registration',
+                    file: 'media.js'
+                })
+            }
+            
 
             // Check premium plan
             const shouldEndPremium = await checkPremiumPlan(userId, numberPhone, name, provider)

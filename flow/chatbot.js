@@ -198,16 +198,8 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 action: 'user_status_check',
                 file: 'chatbot.js'
             })
-            // Actualizar usuario si es NUEVO (antes solo se hacía en segunda acción)
-            if (!userStatus) {
-                userStatus = await putWhatsapp(numberPhone, name, true, profilePictureUrl)
-                defaultLogger.info('Nuevo usuario registrado', {
-                    userId, numberPhone, name, newUserStatus: userStatus,
-                    action: 'new_user_registration',
-                    file: 'chatbot.js'
-                })
-            }
-            if (userStatus && !userStatus.status) {
+
+             if (userStatus && !userStatus.status) {
                 userBuffers[userId] = []
                 await postWhatsappConversation(numberPhone, ctx.body, "")
                 defaultLogger.info('Usuario desactivado', {
@@ -217,6 +209,17 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 })
                 return endFlow()
             }
+
+            // Actualizar usuario si es NUEVO (antes solo se hacía en segunda acción)
+            if (!userStatus) {
+                 await putWhatsapp(numberPhone, name, true, profilePictureUrl)
+                defaultLogger.info('Nuevo usuario registrado', {
+                    userId, numberPhone, name, newUserStatus: userStatus,
+                    action: 'new_user_registration',
+                    file: 'chatbot.js'
+                })
+            }
+           
 
             // Alarma
             const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, ctx.body, "user")
