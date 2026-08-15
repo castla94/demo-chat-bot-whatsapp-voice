@@ -487,8 +487,11 @@ export const waitForTurn = async (phone, {
 
 /**
  * Construye la entrada combinada ordenada cronológicamente.
- * Formato:
- *   [TEXTO]\n...\n\n[AUDIO]\n...\n\n[IMAGEN]\n...
+ * SIN PREFIJOS [TEXTO]/[AUDIO]/[IMAGEN] — solo el contenido real del usuario,
+ * separado por doble salto de línea entre mensajes.
+ *
+ * Formato final:
+ *   "contenido del texto\n\ncontenido del audio transcrito\n\ncontenido de la imagen + caption"
  */
 export const buildCombinedInput = (phone, { file = 'conversationBuffer.js' } = {}) => {
     const conv = ensureConversation(phone)
@@ -496,17 +499,16 @@ export const buildCombinedInput = (phone, { file = 'conversationBuffer.js' } = {
 
     const parts = []
     for (const m of conv.messages) {
-        const header = `[${typeHeaderFor(m.type)}]`
         let body = String(m.content || '').trim()
         if (m.type === 'image' && m.caption && String(m.caption).trim()) {
-            if (!body) body = `(contenido de la imagen sin texto). Caption: "${String(m.caption).trim()}"`
+            if (!body) body = `(contenido de la imagen sin texto). Caption del usuario: "${String(m.caption).trim()}"`
             else body = body + `\n\nCaption del usuario: "${String(m.caption).trim()}"`
         }
-        parts.push(`${header}\n${body}`)
+        if (body) parts.push(body)
     }
     const combined = parts.join('\n\n')
 
-    defaultLogger.info('Contexto combinado construido', {
+    defaultLogger.info('Contexto combinado construido (SIN prefijos)', {
         phoneKey: conv.key,
         phone,
         bufferCount: conv.messages.length,
