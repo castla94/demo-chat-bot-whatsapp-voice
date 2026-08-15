@@ -10,6 +10,7 @@ import 'dotenv/config';
 import { defaultLogger } from './helpers/cloudWatchLogger.js';
 import express from 'express';
 import { getWhatsapp, getWhatsappWhitelist, postWhatsappConversation, putWhatsapp } from './services/aws/index.js';
+import { addReceivedFromRawMessage } from './helpers/conversationBuffer.js';
 
 const app = express();
 const MIME_EXTENSION_MAP = {
@@ -220,6 +221,129 @@ const attachOwnMessageListener = (adapterProvider) => {
     adapterProvider.on('ready', registerListener);
 };
 
+/**
+ * Listener BAILEYS de mensajes ENTRANTES (pre-BuilderBot, punto más temprano).
+ * Registra CADA mensaje (texto/audio/imagen) en la conversación compartida INMEDIATAMENTE
+ * al detectarlo, incrementando la versión global y lastActivityAt ANTES que BuilderBot
+ * encole los addKeyword secuenciales por número.
+ *
+ * Así, cuando el flujo de texto empiece su polling y luego llegue un audio, el listener
+ * de Baileys YA habrá registrado el audio e incrementado la versión a N+1 → el polling
+ * del texto detectará version mismatch y cederá el turno inmediatamente (sin importar que
+ * BuilderBot aún no haya procesado el voice.js por la cola secuencial).
+ */
+const attachIncomingConversationListener = (adapterProvider) => {
+    let activeSock = null;
+
+    const onMessagesUpsert = async ({ messages }) => {
+        for (const message of messages || []) {
+            try {
+                // ======= FILTROS ANTI-NOISE =======
+                const k = message?.key || {}
+                // 1) Mensajes propios NUNCA entran
+                if (k.fromMe === true) continue
+                // 2) Filtrar status (broadcast de estados 0@s.whatsapp.net)
+                const remoteStr = String(k.remoteJid || '')
+                if (remoteStr.startsWith('status@') || remoteStr.includes('broadcast')) continue
+                // 3) Filtrar grupos (remate en @g.us)
+                if (remoteStr.endsWith('@g.us')) continue
+                // 4) Filtrar messageStubType (eventos de grupo, added, leave, etc.)
+                if (message?.messageStubType) continue
+                // 5) Filtrar receipts (acknowledgments sin message payload)
+                if (!message?.message || Object.keys(message.message).length === 0) continue
+                // 6) Bloquear explícitamente tipos que no deben entrar al buffer
+                const m = message.message
+                const noisyTypes = ['reactionMessage','senderKeyDistributionMessage','protocolMessage',
+                    'receiptMessage','pollUpdateMessage','pollCreationMessage','call','commentMessage',
+                    'groupInviteLinkMessage','groupMentionedMessage']
+                let isNoisy = false
+                for (const nt of noisyTypes) if (m[nt]) { isNoisy = true; break }
+                if (isNoisy) {
+                    defaultLogger.debug('Listener raw: mensaje ruido ignorado', {
+                        remoteJid: remoteStr,
+                        messageId: k.id,
+                        types: Object.keys(m),
+                        action: 'conversation_listener_noise_skip',
+                        file: 'app.js'
+                    })
+                    continue
+                }
+
+                defaultLogger.debug('Listener raw: mensaje candidato a buffer', {
+                    remoteJid: remoteStr,
+                    remoteJidAlt: k.remoteJidAlt,
+                    participant: k.participant,
+                    messageId: k.id,
+                    messageTimestamp: message?.messageTimestamp,
+                    messageTypes: Object.keys(m),
+                    action: 'conversation_listener_candidate',
+                    file: 'app.js'
+                })
+
+                const res = addReceivedFromRawMessage(message, { file: 'app.js' });
+                if (res) {
+                    defaultLogger.info('Listener raw registró mensaje en buffer compartido', {
+                        phoneKey: res.phoneKey,
+                        version: res.version,
+                        duplicated: res.duplicated,
+                        entryId: res.entryId,
+                        type: res.type,
+                        receivedAt: res.receivedAt ? new Date(res.receivedAt).toISOString() : null,
+                        action: 'conversation_listener_added',
+                        file: 'app.js'
+                    })
+                }
+            } catch (error) {
+                defaultLogger.error('Error en listener entrada conversación', {
+                    error: error.message,
+                    stack: error.stack,
+                    remoteJid: message?.key?.remoteJid,
+                    action: 'conversation_listener_error',
+                    file: 'app.js'
+                });
+            }
+        }
+    };
+
+    const onConnectionUpdate = () => {
+        registerListener();
+    };
+
+    const detachFromSock = (sock) => {
+        if (!sock?.ev) return;
+        if (typeof sock.ev.off === 'function') {
+            sock.ev.off('messages.upsert', onMessagesUpsert);
+            sock.ev.off('connection.update', onConnectionUpdate);
+            return;
+        }
+        if (typeof sock.ev.removeListener === 'function') {
+            sock.ev.removeListener('messages.upsert', onMessagesUpsert);
+            sock.ev.removeListener('connection.update', onConnectionUpdate);
+        }
+    };
+
+    const attachToSock = (sock) => {
+        if (!sock?.ev?.on) return false;
+        if (activeSock === sock) return true;
+        if (activeSock) detachFromSock(activeSock);
+        sock.ev.on('messages.upsert', onMessagesUpsert);
+        sock.ev.on('connection.update', onConnectionUpdate);
+        activeSock = sock;
+        return true;
+    };
+
+    const registerListener = () => {
+        const sock =
+            adapterProvider.vendor ??
+            adapterProvider.sock ??
+            adapterProvider.instance?.sock;
+        attachToSock(sock);
+    };
+
+    registerListener();
+    adapterProvider.on('ready', registerListener);
+};
+
 const main = async () => {
     try {
         // aumentar el límite de JSON y URL-encoded
@@ -247,6 +371,7 @@ const main = async () => {
         defaultLogger.info('Bot iniciado', { port });
 
         attachOwnMessageListener(adapterProvider);
+        attachIncomingConversationListener(adapterProvider);
 
         /**
          * Enviar mensaje con metodos propios del provider del bot

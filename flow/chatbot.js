@@ -16,6 +16,15 @@ import {
 
 import { defaultLogger } from '../helpers/cloudWatchLogger.js'
 import { getProfilePictureInfo } from '../helpers/whatsappProfile.js'
+import {
+    markMessageReady,
+    waitForTurn,
+    isStillMyTurn,
+    clearConversationAfterResponse,
+    buildCombinedInput,
+    getConversationState,
+    getCurrentVersion
+} from '../helpers/conversationBuffer.js'
 
 // Constantes de configuración
 let TIMEOUT_MS = 45000 // Tiempo de espera aleatorio entre 45-60 segundos
@@ -59,7 +68,9 @@ function extractNumber(ctx) {
  * cuando no hay coincidencias con palabras clave
  */
 export const chatbot = addKeyword(EVENTS.WELCOME)
-    // Primera acción: Validación inicial y procesamiento de mensajes
+    // ÚNICO addAction: TODO (validaciones, coordinación, espera, IA, enviar) en un solo bloque.
+    // Esto evita que BuilderBot encole 2 acciones por usuario separadas (la primera tardando 10s
+    // en whitelist/DB y el audio NI ENTRA hasta que termina todo el flujo).
     .addAction(async (ctx, { state, endFlow, flowDynamic, provider }) => {
         try {
             const userId = ctx.key.remoteJid
@@ -95,7 +106,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 return endFlow()
             }
 
-            defaultLogger.info('Iniciando procesamiento de mensaje', {
+            defaultLogger.info('Iniciando procesamiento de mensaje (texto - unico addAction)', {
                 userId,
                 numberPhone,
                 name,
@@ -105,16 +116,39 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 file: 'chatbot.js'
             })
 
-            // Inicializar buffer de mensajes si no existe
-            if (!userBuffers[userId]) {
-                userBuffers[userId] = []
-            }
-            // Check if message already exists in buffer to avoid duplicates
+            // ================ COORDINACIÓN COMPARTIDA ================
+            // REGLA SIMPLIFICADA:
+            //   ÚNICAMENTE el listener Baileys PRE-BuilderBot inserta mensajes.
+            //   Este flujo solo LEER la versión actual → esta será su flowVersion.
+            const myVersion = getCurrentVersion(numberPhone)
+            const convStateBefore = getConversationState(numberPhone)
+            defaultLogger.info('Conversación compartida (texto - solo lectura)', {
+                userId,
+                numberPhone,
+                name,
+                phoneKey: convStateBefore.phoneKey,
+                myVersion,
+                currentVersion: convStateBefore.version,
+                bufferCount: convStateBefore.bufferCount,
+                bufferTypes: convStateBefore.bufferTypes,
+                lastActivityAt: convStateBefore.lastActivityAt ? new Date(convStateBefore.lastActivityAt).toISOString() : null,
+                action: 'conversation_flow_init_text',
+                file: 'chatbot.js'
+            })
+            const curr = state.getMyState() || {}
+            await state.update({
+                ...curr,
+                conversationVersion: myVersion,
+                conversationPhoneKey: convStateBefore.phoneKey
+            })
+            // =========================================================
+
+            // Inicializar buffer de mensajes si no existe (legacy fallback)
+            if (!userBuffers[userId]) userBuffers[userId] = []
+            // Evitar duplicados legacy
             if (userBuffers[userId].indexOf(ctx.body) !== -1) {
-                defaultLogger.info('Mensaje duplicado, ignorando...', {
-                    userId,
-                    numberPhone,
-                    name,
+                defaultLogger.info('Mensaje duplicado (legacy buffer), ignorando...', {
+                    userId, numberPhone, name,
                     action: 'duplicate_message',
                     file: 'chatbot.js'
                 })
@@ -122,48 +156,35 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             }
             userBuffers[userId].push(ctx.body)
 
-            // Reiniciar timeout si existe
-            if (userTimeouts[userId]) {
-                clearTimeout(userTimeouts[userId])
-            }
+            // Reiniciar timeout legacy
+            if (userTimeouts[userId]) clearTimeout(userTimeouts[userId])
 
-            // Validar si el usuario está en lista blanca
+            // ============ VALIDACIONES (SOLO UNA VEZ - ya no son duplicadas) ============
             const isWhitelisted = await getWhatsappWhitelist(numberPhone)
             defaultLogger.info('Verificación de whitelist', {
-                userId,
-                numberPhone,
-                name,
-                isWhitelisted,
+                userId, numberPhone, name, isWhitelisted,
                 action: 'whitelist_verification',
                 file: 'chatbot.js'
             })
-
             if (isWhitelisted) {
-                userBuffers[userId] = [] // Limpiar buffer
+                userBuffers[userId] = []
                 defaultLogger.info('Usuario en whitelist, finalizando flujo', {
-                    userId,
-                    numberPhone,
-                    name,
+                    userId, numberPhone, name,
                     action: 'whitelist_end_flow',
                     file: 'chatbot.js'
                 })
                 return endFlow()
             }
 
-            // Validar estado global del chatbot
             const botStatus = await whatsappStatus()
             defaultLogger.info('Estado global del bot', {
-                userId,
-                numberPhone,
-                name,
-                botStatus,
+                userId, numberPhone, name, botStatus,
                 action: 'global_status_check',
                 file: 'chatbot.js'
             })
-
             if (botStatus && !botStatus.status) {
-                userBuffers[userId] = [] // Limpiar buffer
-                await postWhatsappConversation(numberPhone, ctx.body, "");
+                userBuffers[userId] = []
+                await postWhatsappConversation(numberPhone, ctx.body, "")
                 defaultLogger.info('Bot desactivado globalmente', {
                     action: 'global_status_end_flow',
                     file: 'chatbot.js'
@@ -171,334 +192,156 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 return endFlow()
             }
 
-            // Validar estado individual del usuario
-            const userStatus = await getWhatsapp(numberPhone, { name, profilePictureUrl })
+            let userStatus = await getWhatsapp(numberPhone, { name, profilePictureUrl })
             defaultLogger.info('Estado del usuario', {
-                userId,
-                numberPhone,
-                name,
-                userStatus,
+                userId, numberPhone, name, userStatus,
                 action: 'user_status_check',
                 file: 'chatbot.js'
             })
-
+            // Actualizar usuario si es NUEVO (antes solo se hacía en segunda acción)
+            if (!userStatus) {
+                userStatus = await putWhatsapp(numberPhone, name, true, profilePictureUrl)
+                defaultLogger.info('Nuevo usuario registrado', {
+                    userId, numberPhone, name, newUserStatus: userStatus,
+                    action: 'new_user_registration',
+                    file: 'chatbot.js'
+                })
+            }
             if (userStatus && !userStatus.status) {
-                userBuffers[userId] = [] // Limpiar buffer
-                await postWhatsappConversation(numberPhone, ctx.body, "");
+                userBuffers[userId] = []
+                await postWhatsappConversation(numberPhone, ctx.body, "")
                 defaultLogger.info('Usuario desactivado', {
-                    userId,
-                    numberPhone,
-                    name,
+                    userId, numberPhone, name,
                     action: 'user_disabled_end_flow',
                     file: 'chatbot.js'
                 })
                 return endFlow()
             }
-            // Call the alarm processing method
+
+            // Alarma
             const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, ctx.body, "user")
             if (shouldEndFlow) return endFlow()
 
-            TIMEOUT_MS = Math.floor(Math.random() * (45000 - 30000 + 1) + 30000) // Tiempo de espera aleatorio entre 30-45 segundos
+            // TIMEOUT_MS random entre 30-45s (solo para legacy fallback cuando conversationVersion <= 0)
+            TIMEOUT_MS = Math.floor(Math.random() * (45000 - 30000 + 1) + 30000)
 
-            // Get current conversation history from state
+            // ===== HISTORIAL =====
             const historyGlobalStatus = state.getMyState()?.history ?? []
-            // Check if there's no conversation history
             if (historyGlobalStatus.length <= 0) {
-                // Fetch conversation history from database
                 const historyDB = await getWhatsappConversation(numberPhone);
                 defaultLogger.info('Historial de conversación recuperado de la base de datos', {
-                    userId,
-                    numberPhone,
-                    name,
+                    userId, numberPhone, name,
                     historyLength: historyDB?.length || 0,
                     action: 'history_db_retrieved',
                     file: 'chatbot.js'
                 })
-
                 defaultLogger.info('Estado actualizado con el historial de conversación', {
-                    userId,
-                    numberPhone,
-                    name,
+                    userId, numberPhone, name,
                     action: 'history_state_updated',
                     file: 'chatbot.js'
                 })
                 await state.update({ history: historyDB })
             }
 
-
-
-        } catch (error) {
-            defaultLogger.error('Error en primera acción chatbot flujo', {
-                userId: ctx.key.remoteJid,
-                numberPhone: ctx.host,
-                name: ctx?.pushName,
-                error: error.message,
-                stack: error.stack,
-                context: ctx,
-                file: 'chatbot.js'
-            })
-        }
-    })
-    // Segunda acción: Procesamiento de respuesta y gestión de conversación
-    .addAction(async (ctx, { flowDynamic, endFlow, state, provider }) => {
-        try {
-
             // 1. Enviar estado "escribiendo"
             await provider.vendor.sendPresenceUpdate('composing', ctx.key.remoteJid)
 
-            const userId = ctx.key.remoteJid
-            const numberPhone = extractNumber(ctx)
-            const name = ctx?.pushName ?? ''
-            const { profilePictureUrl } = await getProfilePictureInfo(ctx, provider, {
-                userId,
-                numberPhone,
-                name,
+            // =================== PROCESAR RESPUESTA (antes "segunda acción") ===================
+            defaultLogger.info('Iniciando etapa de respuesta (texto - único addAction)', {
+                userId, numberPhone, name, messageBody: ctx.body,
+                action: 'response_stage_start',
                 file: 'chatbot.js'
             })
 
-            defaultLogger.info('Iniciando segunda acción', {
-                userId,
-                numberPhone,
-                name,
-                messageBody: ctx.body,
-                action: 'second_action_start',
-                file: 'chatbot.js'
-            })
+            if (myVersion <= 0) {
+                // ---- LEGACY FALLBACK (sin coordinación) ----
+                userTimeouts[userId] = setTimeout(async () => {
+                    const combinedMessages = userBuffers[userId].join(' ')
+                    userBuffers[userId] = []
+                    const newHistory = (state.getMyState()?.history ?? [])
+                    newHistory.push({ role: 'user', content: combinedMessages })
+                    defaultLogger.info('Procesando mensajes acumulados (legacy fallback texto)', {
+                        userId, numberPhone, name, combinedMessages, history: newHistory,
+                        action: 'processing_messages_legacy',
+                        file: 'chatbot.js'
+                    })
+                    const response = await run(name, newHistory, combinedMessages, numberPhone)
+                    await respondAndFinalize(response, combinedMessages, name, numberPhone, userId, ctx, provider, flowDynamic, state)
+                }, TIMEOUT_MS)
+            } else {
+                // ===== COORDINACIÓN COMPARTIDA (polling con waitForTurn) =====
+                const myState = state.getMyState() || {}
+                const flowVersion = Number(myState.conversationVersion || myVersion || 0)
+                const myEntryId = myState.conversationEntryId || null
 
-            // Reiniciar timeout existente
-            if (userTimeouts[userId]) {
-                clearTimeout(userTimeouts[userId])
-            }
-
-            // Validar si el usuario está en lista blanca
-            const isWhitelisted = await getWhatsappWhitelist(numberPhone)
-            defaultLogger.info('Verificación de whitelist', {
-                userId,
-                numberPhone,
-                name,
-                isWhitelisted,
-                action: 'whitelist_verification',
-                file: 'chatbot.js'
-            })
-
-            if (isWhitelisted) {
-                userBuffers[userId] = [] // Limpiar buffer
-                defaultLogger.info('Usuario en whitelist, finalizando flujo', {
-                    userId,
-                    numberPhone,
-                    name,
-                    action: 'whitelist_end_flow',
+                const turn = await waitForTurn(numberPhone, {
+                    flowVersion,
+                    flowType: 'text',
+                    flowId: `text_${myEntryId || ''}`,
                     file: 'chatbot.js'
                 })
-                return endFlow()
-            }
+                if (!turn.acquired) {
+                    defaultLogger.info('Flujo texto cede turno (invalidado)', {
+                        userId, numberPhone, name,
+                        flowVersion,
+                        finalVersion: turn.finalVersion,
+                        cancelReason: turn.cancelReason,
+                        action: 'conversation_text_cede',
+                        file: 'chatbot.js'
+                    })
+                    userBuffers[userId] = []
+                    if (userTimeouts[userId]) { clearTimeout(userTimeouts[userId]); userTimeouts[userId] = null }
+                    return endFlow()
+                }
 
-            // Validar estado global del chatbot
-            const botStatus = await whatsappStatus()
-            defaultLogger.info('Estado global del bot', {
-                userId,
-                numberPhone,
-                name,
-                botStatus,
-                action: 'global_status_check',
-                file: 'chatbot.js'
-            })
-
-            if (botStatus && !botStatus.status) {
-                userBuffers[userId] = [] // Limpiar buffer
-                defaultLogger.info('Bot desactivado globalmente', {
-                    action: 'global_status_end_flow',
-                    file: 'chatbot.js'
-                })
-                return endFlow()
-            }
-
-            // Validar estado individual del usuario
-            const userStatus = await getWhatsapp(numberPhone, { name, profilePictureUrl })
-            defaultLogger.info('Estado del usuario', {
-                userId,
-                numberPhone,
-                name,
-                userStatus,
-                action: 'user_status_check',
-                file: 'chatbot.js'
-            })
-
-            // Actualizar estado del usuario si es nuevo
-            if (!userStatus) {
-                const newUserStatus = await putWhatsapp(numberPhone, name, true, profilePictureUrl)
-                defaultLogger.info('Nuevo usuario registrado', {
-                    userId,
-                    numberPhone,
-                    name,
-                    newUserStatus,
-                    action: 'new_user_registration',
-                    file: 'chatbot.js'
-                })
-            }
-
-            if (userStatus && !userStatus.status) {
-                userBuffers[userId] = [] // Limpiar buffer
-                defaultLogger.info('Usuario desactivado', {
-                    userId,
-                    numberPhone,
-                    name,
-                    action: 'user_disabled_end_flow',
-                    file: 'chatbot.js'
-                })
-                return endFlow()
-            }
-
-            // Procesar mensajes acumulados
-            userTimeouts[userId] = setTimeout(async () => {
-                const combinedMessages = userBuffers[userId].join(' ')
-                userBuffers[userId] = [] // Limpiar buffer
+                const combinedInput = turn.combinedInput || userBuffers[userId].join(' ')
+                userBuffers[userId] = []
+                if (userTimeouts[userId]) { clearTimeout(userTimeouts[userId]); userTimeouts[userId] = null }
 
                 const newHistory = (state.getMyState()?.history ?? [])
-                newHistory.push({
-                    role: 'user',
-                    content: combinedMessages
-                })
+                newHistory.push({ role: 'user', content: combinedInput })
 
-                defaultLogger.info('Procesando mensajes acumulados', {
-                    userId,
-                    numberPhone,
-                    name,
-                    combinedMessages,
-                    history: newHistory,
-                    action: 'processing_messages',
+                defaultLogger.info('Procesando mensajes acumulados (coordinación compartida texto)', {
+                    userId, numberPhone, name,
+                    flowVersion,
+                    combinedInput,
+                    combinedLength: String(combinedInput).length,
+                    historyLength: newHistory.length,
+                    action: 'processing_messages_shared_text',
                     file: 'chatbot.js'
                 })
 
-                // Obtener respuesta del modelo
-                const response = await run(name, newHistory, combinedMessages, numberPhone)
-                defaultLogger.info('Respuesta del modelo obtenida', {
-                    userId,
-                    numberPhone,
-                    name,
+                defaultLogger.info('Inicio consulta IA (texto, coordinado)', {
+                    userId, numberPhone, name,
+                    flowVersion,
+                    combinedLength: String(combinedInput).length,
+                    action: 'conversation_ai_request_start',
+                    file: 'chatbot.js'
+                })
+                const response = await run(name, newHistory, combinedInput, numberPhone)
+                defaultLogger.info('Respuesta del modelo obtenida (texto, coordinado)', {
+                    userId, numberPhone, name,
+                    flowVersion,
                     modelResponse: response,
-                    action: 'model_response',
+                    action: 'conversation_ai_response_done',
                     file: 'chatbot.js'
                 })
 
-                // Check if the last message from assistant matches the current response
-                if (newHistory.length >= 2 && 
-                    newHistory[newHistory.length - 2].role === 'assistant' && 
-                    newHistory[newHistory.length - 2].content === response) {
-                    defaultLogger.info('Mensaje duplicado OpenIA, ignorando...', {
-                        userId,
-                        numberPhone,
-                        name,
-                        action: 'duplicate_message_openia',
+                // ===== SEGUNDA VALIDACIÓN POST-IA =====
+                if (!isStillMyTurn(numberPhone, { flowVersion, file: 'chatbot.js' })) {
+                    defaultLogger.info('Segunda validación falló (texto): llegó otro mensaje durante IA', {
+                        userId, numberPhone, name,
+                        flowVersion,
+                        action: 'conversation_text_post_ai_invalid',
                         file: 'chatbot.js'
                     })
                     return endFlow()
                 }
 
-                // Call the alarm processing method
-                const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, response, "IA")
-                if (shouldEndFlow) return endFlow()
-                // Procesar orden si se detecta
-                if (response.toLowerCase().includes("datos recibidos")) {
-
-                    const whatsappPrompt = await promptGetWhatsapp(combinedMessages);
-                    if (whatsappPrompt.products_dynamic) {
-                        const updatePrompt = await runUpdatePromptServicesProduct(response);
-                        defaultLogger.info('Prompt actualizado', {
-                            userId,
-                            numberPhone,
-                            name,
-                            updatePrompt,
-                            action: 'update_prompt_complete',
-                            file: 'chatbot.js'
-                        });
-
-                        const responseUpdateProductWhatsapp = await promptUpdateProductWhatsapp(updatePrompt);
-                        defaultLogger.info('Respuesta de actualización de producto prompt', {
-                            userId,
-                            numberPhone,
-                            name,
-                            responseUpdateProductWhatsapp,
-                            action: 'product_update_response',
-                            file: 'chatbot.js'
-                        });
-                    }
-
-                    const orderConfirmation = await putWhatsappOrderConfirmation(name, numberPhone, response, "pending_payment")
-                    defaultLogger.info('Orden procesada', {
-                        userId,
-                        numberPhone,
-                        name,
-                        response,
-                        orderConfirmation,
-                        action: 'order_processing',
-                        file: 'chatbot.js'
-                    })
-                    await putWhatsapp(numberPhone, name, false)
-                }
-                
-                // Enviar respuesta en chunks
-                //const chunks = response.split(/(?<!\d)\.(?=\s|$)|:\n\n/g)
-                const chunks = response.split(/:\n\n|\n\n/)
-
-                const greetings = ['hola', 'como esta', 'buenos dias', 'buenas tardes', 'buenas noches']
-                if (greetings.some(greeting => ctx.body.toLowerCase().includes(greeting))) {
-                    /*await putWhatsapp(numberPhone, name, true)
-                    defaultLogger.info('Usuario activado', {
-                        userId,
-                        numberPhone,
-                        name,
-                        action: 'user_active',
-                        file: 'chatbot.js'
-                    })*/
-                    // Get welcome message 
-                    const whatsappPrompt = await promptGetWhatsapp(ctx.body.toLowerCase().trim())
-                    await displayFile(whatsappPrompt,provider,numberPhone)
-                }
-
-                
-
-                //for (const chunk of chunks) {
-                    if(numberPhone.length <= 11){
-                        defaultLogger.info('Enviando chunk por provider.sendMessage', {
-                            numberPhone,
-                            numberPhoneLength: numberPhone.length,
-                            chunk: response,
-                            file: 'chatbot.js'
-                        })
-                        await provider.sendMessage(numberPhone, response, { media: null })
-                    }else{
-                        defaultLogger.info('Enviando chunk por flowDynamic', {
-                            numberPhone,
-                            numberPhoneLength: numberPhone.length,
-                            chunk: response,
-                            file: 'chatbot.js'
-                        })
-                        await flowDynamic(response)
-                    }
-                    //await sleep(2000)
-                //}
-
-                // Actualizar historial
-                newHistory.push({
-                    role: 'assistant',
-                    content: response
-                })
-
-                // Eliminar los primeros 2 elementos
-                // Comprobar si el array tiene más de 20 elementos
-                if (newHistory.length > 20) {
-                    // Eliminar los primeros 2 elementos si tiene más de 20 elementos
-                    newHistory.splice(0, 2);
-                }
-
-                await state.update({ history: newHistory })
-
-                
-            }, TIMEOUT_MS)
-
+                await respondAndFinalize(response, combinedInput, name, numberPhone, userId, ctx, provider, flowDynamic, state, flowVersion)
+            }
         } catch (error) {
-            defaultLogger.error('Error en segunda acción chatbot flujo', {
+            defaultLogger.error('Error en flujo texto (único addAction)', {
                 userId: ctx.key.remoteJid,
                 numberPhone: ctx.host,
                 name: ctx?.pushName,
@@ -507,10 +350,12 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 context: ctx,
                 file: 'chatbot.js'
             })
-        }finally{
-            await provider.vendor.readMessages([ctx.key])
-            await new Promise(resolve => setTimeout(resolve, 5000));
-            await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
+        } finally {
+            try {
+                await provider.vendor.readMessages([ctx.key])
+                await new Promise(resolve => setTimeout(resolve, 5000));
+                await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
+            } catch (_) { /* no-op: vendor puede estar desconectado */ }
         }
     })
 
@@ -532,6 +377,120 @@ const displayFile = async (whatsappPrompt, provider,numberPhone) => {
             file: 'chatbot.js'
         })
     }
+}
+
+/**
+ * Función común: enviar respuesta al usuario, procesar orden si detecta "datos recibidos",
+ * actualizar historial, enviar saludo/menú si corresponde, y SOLO AL FINAL limpiar buffer.
+ * @param {number|undefined} flowVersion Si está presente, se usa para 2ª validación y limpieza coordinada.
+ */
+const respondAndFinalize = async (response, combinedMessages, name, numberPhone, userId, ctx, provider, flowDynamic, state, flowVersion) => {
+    const st = state.getMyState() || {}
+    const newHistory = (st.history ?? []).slice()
+
+    // Chequear duplicado IA
+    if (newHistory.length >= 2 &&
+        newHistory[newHistory.length - 2].role === 'assistant' &&
+        newHistory[newHistory.length - 2].content === response) {
+        defaultLogger.info('Mensaje duplicado OpenIA, ignorando...', {
+            userId, numberPhone, name,
+            action: 'duplicate_message_openia',
+            file: 'chatbot.js'
+        })
+        if (flowVersion !== undefined) {
+            defaultLogger.info('(Coordinado) Flujo se detiene por duplicado pero NO limpia buffer', {
+                flowVersion, numberPhone, action: 'conversation_text_duplicate_no_clear', file: 'chatbot.js'
+            })
+        }
+        return { duplicated: true }
+    }
+
+    // Alarm IA
+    const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, response, "IA")
+    if (shouldEndFlow) return { alarm: true }
+
+    // Procesar orden "datos recibidos"
+    if (response.toLowerCase().includes("datos recibidos")) {
+        const whatsappPrompt = await promptGetWhatsapp(combinedMessages);
+        if (whatsappPrompt.products_dynamic) {
+            const updatePrompt = await runUpdatePromptServicesProduct(response);
+            defaultLogger.info('Prompt actualizado', {
+                userId, numberPhone, name, updatePrompt,
+                action: 'update_prompt_complete', file: 'chatbot.js'
+            });
+            const responseUpdateProductWhatsapp = await promptUpdateProductWhatsapp(updatePrompt);
+            defaultLogger.info('Respuesta de actualización de producto prompt', {
+                userId, numberPhone, name, responseUpdateProductWhatsapp,
+                action: 'product_update_response', file: 'chatbot.js'
+            });
+        }
+        const orderConfirmation = await putWhatsappOrderConfirmation(name, numberPhone, response, "pending_payment")
+        defaultLogger.info('Orden procesada', {
+            userId, numberPhone, name, response, orderConfirmation,
+            action: 'order_processing', file: 'chatbot.js'
+        })
+        await putWhatsapp(numberPhone, name, false)
+    }
+
+    // Saludo / menú
+    const greetings = ['hola', 'como esta', 'buenos dias', 'buenas tardes', 'buenas noches']
+    if (greetings.some(greeting => String(ctx.body || '').toLowerCase().includes(greeting))) {
+        const whatsappPrompt = await promptGetWhatsapp(String(ctx.body || '').toLowerCase().trim())
+        await displayFile(whatsappPrompt, provider, numberPhone)
+    }
+
+    defaultLogger.info('Enviando respuesta final al usuario', {
+        numberPhone,
+        userId,
+        responseLength: String(response).length,
+        flowVersion: flowVersion !== undefined ? flowVersion : 'legacy',
+        responsePreview: String(response).slice(0, 200),
+        action: flowVersion !== undefined ? 'conversation_text_response_sending' : 'response_sending',
+        file: 'chatbot.js'
+    })
+
+    // Enviar respuesta
+    if (numberPhone.length <= 11) {
+        defaultLogger.info('Enviando chunk por provider.sendMessage', {
+            numberPhone, numberPhoneLength: numberPhone.length, chunk: response,
+            file: 'chatbot.js'
+        })
+        await provider.sendMessage(numberPhone, response, { media: null })
+    } else {
+        defaultLogger.info('Enviando chunk por flowDynamic', {
+            numberPhone, numberPhoneLength: numberPhone.length, chunk: response,
+            file: 'chatbot.js'
+        })
+        await flowDynamic(response)
+    }
+
+    // Actualizar historial (role assistant)
+    // Asegurar que el role user ya está (en legacy no lo garantizamos pero aquí lo hacemos)
+    if (newHistory.length === 0 || newHistory[newHistory.length - 1].role !== 'user' || newHistory[newHistory.length - 1].content !== combinedMessages) {
+        newHistory.push({ role: 'user', content: combinedMessages })
+    }
+    newHistory.push({ role: 'assistant', content: response })
+    if (newHistory.length > 20) newHistory.splice(0, 2)
+    await state.update({ history: newHistory })
+
+    // ============== LIMPIAR BUFFER COORDINADO (solo después de enviar OK) ==============
+    if (flowVersion !== undefined) {
+        clearConversationAfterResponse(numberPhone, {
+            finalVersion: flowVersion,
+            file: 'chatbot.js'
+        })
+    }
+
+    defaultLogger.info('Respuesta enviada correctamente', {
+        numberPhone,
+        userId,
+        flowVersion: flowVersion !== undefined ? flowVersion : 'legacy',
+        historyLength: newHistory.length,
+        action: flowVersion !== undefined ? 'conversation_text_response_sent' : 'response_sent',
+        file: 'chatbot.js'
+    })
+
+    return { ok: true }
 }
 
 function hasOnlyEmoji(str) {
