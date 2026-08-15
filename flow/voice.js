@@ -294,6 +294,8 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
                 })
                 const shouldEndFlow2 = await processAlarm(ctx, numberPhone, name, provider, response, transcribedText, "IA")
                 if (shouldEndFlow2) return endFlow()
+                // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run + alarm IA, antes de enviar respuesta)
+                try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
                 await respondAndFinalize(response, transcribedText, name, numberPhone, userId, ctx, provider, flowDynamic, state)
                 return null
             }
@@ -362,6 +364,9 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             const shouldEndFlow2 = await processAlarm(ctx, numberPhone, name, provider, response, transcribedText, "IA")
             if (shouldEndFlow2) return endFlow()
 
+            // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run + isStillMyTurn + alarm IA, antes de enviar respuesta)
+            try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
+
             await respondAndFinalize(response, combinedInput, name, numberPhone, userId, ctx, provider, flowDynamic, state, flowVersion)
 
         } catch (error) {
@@ -375,7 +380,7 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             return endFlow()
         } finally {
             try {
-                await provider.vendor.readMessages([ctx.key])
+                // ✅ SÓLO presence paused + sleep (quitamos readMessages de aquí para no marcar sin responder)
                 await new Promise(resolve => setTimeout(resolve, 5000));
                 await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
             } catch (_) { /* no-op */ }

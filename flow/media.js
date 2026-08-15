@@ -473,7 +473,7 @@ export const media = addKeyword(EVENTS.MEDIA)
             return endFlow()
         } finally {
             try {
-                await provider.vendor.readMessages([ctx.key])
+                // ✅ SÓLO presence paused + sleep (quitamos readMessages de aquí para no marcar sin responder)
                 await new Promise(resolve => setTimeout(resolve, 5000));
                 await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
             } catch (_) { /* no-op */ }
@@ -503,6 +503,10 @@ const respondAndFinalize = async ({
         });
         return { alarm: true }
     }
+
+    // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run + isStillMyTurn + alarm IA, justo ANTES de enviar respuesta)
+    // Nota: respondAndFinalize es llamado SÓLO cuando todos los checks anteriores pasaron (legacy y coordinado).
+    try { if (ctx && ctx.key) await provider.vendor.readMessages([ctx.key]) } catch (_) {}
 
     defaultLogger.info('Enviando respuesta final al usuario (media)', {
         numberPhone, userId,

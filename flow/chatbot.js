@@ -266,6 +266,8 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                         file: 'chatbot.js'
                     })
                     const response = await run(name, newHistory, combinedMessages, numberPhone)
+                    // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de IA, antes de enviar respuesta)
+                    try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
                     await respondAndFinalize(response, combinedMessages, name, numberPhone, userId, ctx, provider, flowDynamic, state)
                 }, TIMEOUT_MS)
             } else {
@@ -338,6 +340,9 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                     return endFlow()
                 }
 
+                // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run + isStillMyTurn, antes de enviar respuesta)
+                try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
+
                 await respondAndFinalize(response, combinedInput, name, numberPhone, userId, ctx, provider, flowDynamic, state, flowVersion)
             }
         } catch (error) {
@@ -352,7 +357,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             })
         } finally {
             try {
-                await provider.vendor.readMessages([ctx.key])
+                // ✅ SÓLO presence paused + sleep (quitamos readMessages de aquí para no marcar sin responder)
                 await new Promise(resolve => setTimeout(resolve, 5000));
                 await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
             } catch (_) { /* no-op: vendor puede estar desconectado */ }
