@@ -226,7 +226,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             if (shouldEndFlow) return endFlow()
 
             // TIMEOUT_MS random entre 30-45s (solo para legacy fallback cuando conversationVersion <= 0)
-            TIMEOUT_MS = Math.floor(Math.random() * (45000 - 30000 + 1) + 30000)
+            TIMEOUT_MS = Math.floor(Math.random() * (60000 - 45000 + 1) + 45000)
 
             // ===== HISTORIAL =====
             const historyGlobalStatus = state.getMyState()?.history ?? []

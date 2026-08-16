@@ -77,9 +77,10 @@ const resolveOpenAIQuestion = (modelSelected, question) => {
 };
 
 const resolveModelSelection = async (question) => {
-    if (!ENABLE_MODEL_CLASSIFICATION) {
+    //if (!ENABLE_MODEL_CLASSIFICATION) {
+    if (true) {
         return {
-            modelSelected: DEFAULT_OPENAI_MODEL,
+            modelSelected: "gpt-5-mini",
             classification: null,
             classificationEnabled: false
         };
@@ -422,12 +423,13 @@ export const run = async (name, history, question, phone,imageBase64 = "") => {
 
         const response = await openai.chat.completions.create({
             model: modelSelected,
+            ...(modelSelected === "gpt-5-mini" ? { reasoning_effort: "low" } : {}),
             messages: [
-                { role: "system", content: prompt },
+                { role: "developer", content: prompt },
                 ...history,
                 { role: "user", content: finalQuestion }
             ],
-            temperature: 0,
+            ...(modelSelected === "gpt-5-mini" ? {} : { temperature: 0 }),
             top_p: 1,
             frequency_penalty: 0,
             presence_penalty: 0,
