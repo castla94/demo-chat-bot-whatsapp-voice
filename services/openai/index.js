@@ -57,8 +57,8 @@ const extractDate = (message) => {
     };
 };
 
-const resolveOpenAIQuestion = (modelSelected, question) => {
-    if (modelSelected !== 'gpt-4o') {
+const resolveOpenAIQuestion = (requiresStrongModel, question) => {
+    if (!requiresStrongModel) {
         return {
             finalQuestion: question,
             dateExtracted: null,
@@ -77,8 +77,7 @@ const resolveOpenAIQuestion = (modelSelected, question) => {
 };
 
 const resolveModelSelection = async (question) => {
-    //if (!ENABLE_MODEL_CLASSIFICATION) {
-    if (true) {
+    if (!ENABLE_MODEL_CLASSIFICATION) {
         return {
             modelSelected: "gpt-5-mini",
             classification: null,
@@ -87,7 +86,7 @@ const resolveModelSelection = async (question) => {
     }
 
     const classification = await classifyIntent(question);
-    const modelSelected = classification?.requires_strong_model ? "gpt-4o" : DEFAULT_OPENAI_MODEL;
+    const modelSelected = "gpt-5-mini";//classification?.requires_strong_model ? "gpt-4o" : DEFAULT_OPENAI_MODEL;
 
     return {
         modelSelected,
@@ -403,7 +402,7 @@ export const run = async (name, history, question, phone,imageBase64 = "") => {
 
         const prompt = await generatePrompt(name, question);
         const { modelSelected, classification, classificationEnabled } = await resolveModelSelection(question);
-        const { finalQuestion, dateExtracted, dateApplied } = resolveOpenAIQuestion(modelSelected, question);
+        const { finalQuestion, dateExtracted, dateApplied } = resolveOpenAIQuestion(classification?.requires_strong_model, question);
         defaultLogger.info('Modelo seleccionado para consulta', {
             userId,
             numberPhone,
