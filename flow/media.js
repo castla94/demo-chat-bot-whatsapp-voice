@@ -387,10 +387,11 @@ export const media = addKeyword(EVENTS.MEDIA)
                 const newHistory = (state.getMyState()?.history ?? []).slice()
                 newHistory.push({ role: 'user', content: imageProcessedContent })
                 const response = await run(name, newHistory, imageProcessedContent, numberPhone, responseImage.img)
-                defaultLogger.info('Respuesta del modelo obtenida Texto Imagen (legacy)', {
+                defaultLogger.info('Respuesta del modelo obtenida Texto Imagen (legacy). FLUJO COMPROMETIDO: NO INVALIDAR POR NADA', {
                     userId, numberPhone, name,
                     modelResponse: response,
                     action: 'model_response_legacy',
+                    note: 'DESPUÉS DE ESTE PUNTO, SIN 2ª VALIDACIÓN, SE RESPONDE OBLIGATORIAMENTE',
                     file: 'media.js'
                 })
                 await respondAndFinalize({
@@ -445,28 +446,17 @@ export const media = addKeyword(EVENTS.MEDIA)
                 file: 'media.js'
             })
             const response = await run(name, newHistory, combinedInput, numberPhone, responseImage.img)
-            defaultLogger.info('Respuesta del modelo obtenida (imagen, coordinado)', {
+            defaultLogger.info('Respuesta del modelo obtenida (imagen, coordinado). FLUJO COMPROMETIDO: NO INVALIDAR POR NADA, RESPONDER SIEMPRE', {
                 userId, numberPhone, name,
                 flowVersion,
                 modelResponse: response,
                 action: 'conversation_ai_response_done',
+                note: 'DESPUÉS DE ESTE PUNTO, SIN 2ª VALIDACIÓN, SE RESPONDE OBLIGATORIAMENTE',
                 file: 'media.js'
             })
 
-            // ===== SEGUNDA VALIDACIÓN POST-IA =====
-            if (!isStillMyTurn(numberPhone, { flowVersion, file: 'media.js' })) {
-                defaultLogger.info('Segunda validación falló (imagen): llegó otro mensaje durante IA', {
-                    userId, numberPhone, name,
-                    flowVersion,
-                    action: 'conversation_image_post_ai_invalid',
-                    file: 'media.js'
-                })
-                fs.unlink(pathImg, (error) => {
-                    if (error) defaultLogger.error('Error eliminando Imagen', { userId, numberPhone, name, error: error.message, action: 'delete_image', file: 'media.js' });
-                });
-                return endFlow()
-            }
-
+            // ✅ REGLA DE NEGOCIO: no hay 2ª validación isStillMyTurn aquí.
+            //    Si llegamos hasta aquí con respuesta IA, se envía sí o sí.
             // Alarm IA-side ESTÁ DENTRO de respondAndFinalize (ya lo tenía media.js originalmente)
             await respondAndFinalize({
                 response,

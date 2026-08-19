@@ -340,26 +340,18 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                     file: 'chatbot.js'
                 })
                 const response = await run(name, newHistory, combinedInput, numberPhone)
-                defaultLogger.info('Respuesta del modelo obtenida (texto, coordinado)', {
+                defaultLogger.info('Respuesta del modelo obtenida (texto, coordinado). FLUJO COMPROMETIDO: NO INVALIDAR POR NADA, RESPONDER SIEMPRE', {
                     userId, numberPhone, name,
                     flowVersion,
                     modelResponse: response,
                     action: 'conversation_ai_response_done',
+                    note: 'DESPUÉS DE ESTE PUNTO, NO HAY 2ª VALIDACIÓN, SE RESPONDE OBLIGATORIAMENTE',
                     file: 'chatbot.js'
                 })
 
-                // ===== SEGUNDA VALIDACIÓN POST-IA =====
-                if (!isStillMyTurn(numberPhone, { flowVersion, file: 'chatbot.js' })) {
-                    defaultLogger.info('Segunda validación falló (texto): llegó otro mensaje durante IA', {
-                        userId, numberPhone, name,
-                        flowVersion,
-                        action: 'conversation_text_post_ai_invalid',
-                        file: 'chatbot.js'
-                    })
-                    return endFlow()
-                }
-
-                // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run + isStillMyTurn, antes de enviar respuesta)
+                // ✅ REGLA DE NEGOCIO: no hay 2ª validación isStillMyTurn aquí.
+                //    Si llegamos hasta aquí con respuesta IA, se envía sí o sí.
+                // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run, antes de enviar respuesta)
                 try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
 
                 await respondAndFinalize(response, combinedInput, name, numberPhone, userId, ctx, provider, flowDynamic, state, flowVersion)

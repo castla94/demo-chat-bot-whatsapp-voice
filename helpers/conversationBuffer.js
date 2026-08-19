@@ -1160,13 +1160,64 @@ export const clearConversationAfterResponse = (phone, {
     file = 'conversationBuffer.js'
 } = {}) => {
     const conv = ensureConversation(phone)
-    const removedCount = conv.messages.length
-    conv.messages = []
+    const totalBeforeCount = conv.messages.length
+
+    // ============================================================
+    // FIX IMPORTANTE: NUNCA PERDER MENSAJES NUEVOS QUE LLEGARON
+    // DURANTE EL PROCESAMIENTO DE LA IA.
+    //
+    // Escenario normal:
+    //   T=0s Usuario envía msg 1 (version=1)
+    //   T=45s Flujo adquiere turno, llama a run()
+    //   T=48s (mientras IA piensa) Usuario envía msg 2 (version=2)
+    //   T=50s run() termina, flujo original responde con version finalVersion=1
+    //   T=50s clearConversationAfterResponse(1) es llamado.
+    //
+    // ANTES: conv.messages = [] (TODO borrado). msg 2 se perdía. 🔴
+    // AHORA: solo borro mensajes con version<=1. msg 2 se conserva! 🟢
+    //
+    // Así el msg 2 (version=2) activará BuilderBot addKeyword automáticamente
+    // y se procesará en un FLUJO NUEVO COMPLETAMENTE INDEPENDIENTE,
+    // tal como pidió explícitamente la regla de negocio.
+    // ============================================================
+    let removedCount = 0
+    let preservedCount = 0
+    let preservedVersions = []
+    if (finalVersion !== undefined && Number(conv.version) !== Number(finalVersion)) {
+        // Caso: HUBO MENSAJES NUEVOS DURANTE IA. Conservarlos.
+        const currentTotal = totalBeforeCount
+        conv.messages = conv.messages.filter(m => {
+            if (Number(m.version || 0) <= Number(finalVersion)) {
+                removedCount++
+                return false // eliminar
+            }
+            preservedCount++
+            preservedVersions.push(Number(m.version || 0))
+            return true // conservar
+        })
+        defaultLogger.info('Clear post-respuesta: hubo mensajes nuevos durante IA → CONSERVADOS (flujo nuevo independiente)', {
+            phoneKey: conv.key,
+            phone,
+            totalBeforeCount,
+            removedOlderVersions: removedCount,
+            preservedNewerCount: preservedCount,
+            preservedVersions: preservedCount < 20 ? preservedVersions : `${preservedCount} items (omit list)`,
+            finalVersionResponded: Number(finalVersion),
+            currentVersionStill: Number(conv.version),
+            lastActivityStill: conv.lastActivityAt ? new Date(conv.lastActivityAt).toISOString() : null,
+            note: 'LOS MENSAJES CONSERVADOS SERÁN PROCESADOS EN UN FLUJO NUEVO DE BUILDERBOT',
+            action: 'conversation_cleared_preserved_new_messages',
+            file
+        })
+    } else {
+        // Caso: NO hubo mensajes nuevos durante IA → limpiar todo normal.
+        removedCount = totalBeforeCount
+        preservedCount = 0
+        conv.messages = []
+    }
 
     // ============================================================
     // Fix D: Cancelar timer TTL invalidación después de RESPUESTA EXITOSA.
-    // Cuando se envía respuesta con éxito: NO hay conversación huérfana,
-    // no hay desfase, cualquier timer programado se cancela.
     // ============================================================
     clearInvalidationTimer(conv)
     if (conv.metadata) {
@@ -1178,9 +1229,10 @@ export const clearConversationAfterResponse = (phone, {
     // Limpiar lock de adquirir turno (otro flujo podría correr luego).
     conv.turnAcquiredLock = null
 
-    // Solo si la versión actual coincide con la respondida, resetear última actividad.
-    // Si entre que respondimos y el clear llegó otro mensaje (aunque sea raro por la 2ª validación),
-    // conservar estado para no perderlo.
+    // Resetear version/lastActivityAt SÓLO cuando NO se conservaron mensajes nuevos
+    // (es decir, cuando respondimos la versión actual con exactamente la misma).
+    // Si conservamos mensajes nuevos, NO reseteamos (de lo contrario la versión
+    // de esos mensajes nuevos quedaría huérfana con un version=0 global y todo).
     if (finalVersion !== undefined && Number(conv.version) === Number(finalVersion)) {
         conv.lastActivityAt = 0
         conv.version = 0
@@ -1188,15 +1240,19 @@ export const clearConversationAfterResponse = (phone, {
     defaultLogger.info('Buffer de conversación limpio (respuesta enviada OK)', {
         phoneKey: conv.key,
         phone,
+        totalBeforeCount,
         removedCount,
+        preservedCount,
         finalVersion,
         currentVersion: conv.version,
         invalidationTimerCancelled: !(conv.metadata && conv.metadata.invalidationTimer),
         turnLockCleared: true,
+        preservedNewerMessagesExist: preservedCount > 0,
+        note: preservedCount > 0 ? 'NUEVO FLUJO BuilderBot disparará para mensajes conservados' : null,
         action: 'conversation_cleared_after_response',
         file
     })
-    return { removedCount, phoneKey: conv.key }
+    return { removedCount, preservedCount, phoneKey: conv.key }
 }
 
 /**

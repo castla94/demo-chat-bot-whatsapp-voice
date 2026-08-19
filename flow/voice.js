@@ -301,10 +301,12 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
                     userId, numberPhone, name, transcribedText,
                     history: newHistory, action: 'processing_messages_legacy', file: 'voice.js'
                 })
-                const response = await run(name, newHistory, transcribedText, numberPhone)
-                defaultLogger.info('Respuesta del modelo obtenida (legacy audio)', {
+            const response = await run(name, newHistory, transcribedText, numberPhone)
+                defaultLogger.info('Respuesta del modelo obtenida (legacy audio). FLUJO COMPROMETIDO: NO INVALIDAR POR NADA', {
                     userId, numberPhone, name, modelResponse: response,
-                    action: 'model_response', file: 'voice.js'
+                    action: 'model_response',
+                    note: 'DESPUÉS DE ESTE PUNTO, SIN 2ª VALIDACIÓN, SE RESPONDE OBLIGATORIAMENTE',
+                    file: 'voice.js'
                 })
                 const shouldEndFlow2 = await processAlarm(ctx, numberPhone, name, provider, response, transcribedText, "IA")
                 if (shouldEndFlow2) return endFlow()
@@ -357,28 +359,21 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
                 file: 'voice.js'
             })
             const response = await run(name, newHistory, combinedInput, numberPhone)
-            defaultLogger.info('Respuesta del modelo obtenida (audio, coordinado)', {
+            defaultLogger.info('Respuesta del modelo obtenida (audio, coordinado). FLUJO COMPROMETIDO: NO INVALIDAR POR NADA, RESPONDER SIEMPRE', {
                 userId, numberPhone, name,
                 flowVersion,
                 modelResponse: response,
                 action: 'conversation_ai_response_done',
+                note: 'DESPUÉS DE ESTE PUNTO, SIN 2ª VALIDACIÓN, SE RESPONDE OBLIGATORIAMENTE',
                 file: 'voice.js'
             })
 
-            if (!isStillMyTurn(numberPhone, { flowVersion, file: 'voice.js' })) {
-                defaultLogger.info('Segunda validación falló (audio): llegó otro mensaje durante IA', {
-                    userId, numberPhone, name,
-                    flowVersion,
-                    action: 'conversation_audio_post_ai_invalid',
-                    file: 'voice.js'
-                })
-                return endFlow()
-            }
-
+            // ✅ REGLA DE NEGOCIO: no hay 2ª validación isStillMyTurn aquí.
+            //    Si llegamos hasta aquí con respuesta IA, se envía sí o sí.
             const shouldEndFlow2 = await processAlarm(ctx, numberPhone, name, provider, response, transcribedText, "IA")
             if (shouldEndFlow2) return endFlow()
 
-            // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run + isStillMyTurn + alarm IA, antes de enviar respuesta)
+            // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run + alarm IA, antes de enviar respuesta)
             try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
 
             await respondAndFinalize(response, combinedInput, name, numberPhone, userId, ctx, provider, flowDynamic, state, flowVersion)
