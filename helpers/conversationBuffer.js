@@ -22,6 +22,31 @@ const POLL_TICK_MS = 1000
 const MAX_WAIT_MS = 15 * 60 * 1000 // hard limit para no colgar polling para siempre
 
 // ============================================================
+// TTL (Time To Live) para invalidaciones por desfase de versión
+// ============================================================
+// Fix DESFASE VERSIÓN HUÉRFANA:
+//   Si un flow cede por version_mismatch pero luego NUNCA llega un
+//   nuevo flow BuilderBot que haga polling por la nueva versión
+//   (porque BuilderBot no disparó addKeyword consecutivo, etc.),
+//   la conversación quedaba en limbo infinito.
+//
+// Solución:
+//   1) ORPHAN_RESCUE_MS = SILENCE_WINDOW_MS (45s): después de invalidación,
+//      si el siguiente flow que intenta ceder detecta que ya pasaron 45s
+//      de silencio y hay mensajes listos → ÉL MISMO rescata y responde
+//      (aunque no sea "su" versión).
+//   2) INVALIDATION_RESET_TTL_MS = 30 * 1000: si desde la invalidación
+//      pasan 30s Y NADIE ha cambiado la versión (ni rescató ni respondió),
+//      se hace RESET COMPLETO de la conversación (version=0, messages=[]).
+//      El siguiente mensaje de texto empieza desde 0, sin desfase.
+//   3) GREETINGS_RESET: si el usuario escribe "hola/buenos días/etc"
+//      y la conversación está huérfana (≥2min sin responder) → reset.
+// ============================================================
+const INVALIDATION_RESET_TTL_MS = 30 * 1000
+const GREETINGS_ORPHAN_RESET_MS = 2 * 60 * 1000
+const GREETINGS_KEYWORDS = ['hola', 'buenos dias', 'buenas tardes', 'buenas noches', 'que tal', 'alo', 'buen dia', 'holi', 'holaa', 'hey', 'hi', 'hello']
+
+// ============================================================
 // TIPOS DE MENSAJE SOPORTADOS (VÁLIDOS) PARA LA COORDINACIÓN.
 // CUALQUIER otro tipo (sticker, video, document, unknown, reaction, poll, etc.)
 // SERÁ COMPLETAMENTE IGNORADO:
@@ -34,7 +59,85 @@ const SUPPORTED_TYPES = new Set(['text', 'audio', 'image'])
 
 const isValidType = (type) => SUPPORTED_TYPES.has(String(type || '').toLowerCase())
 
+const isGreetingText = (s) => {
+    const t = String(s || '').toLowerCase().trim()
+    if (!t) return false
+    return GREETINGS_KEYWORDS.some(g => t === g || t.startsWith(g + ' ') || t.startsWith(g + ','))
+}
+
 const conversations = new Map()
+
+// Limpiar timer de invalidación de una conversación (si existe)
+const clearInvalidationTimer = (conv) => {
+    try {
+        if (conv && conv.metadata && conv.metadata.invalidationTimer) {
+            clearTimeout(conv.metadata.invalidationTimer)
+            conv.metadata.invalidationTimer = null
+        }
+    } catch (_) { /* no-op */ }
+}
+
+// Programar timer TTL 30s de reset por invalidación huérfana.
+// Solo se programa UNA VEZ por invalidación (no re-armar timer si ya hay uno corriendo).
+const scheduleInvalidationReset = (conv, phoneKey, phone, callerFile) => {
+    if (!conv) return
+    // Si ya hay un timer programado, no volver a armar
+    if (conv.metadata && conv.metadata.invalidationTimer) return
+
+    const invalidationVersionAtSchedule = Number(conv.version || 0)
+    conv.metadata.invalidationVersionExpected = invalidationVersionAtSchedule
+    conv.metadata.invalidatedAt = Date.now()
+
+    defaultLogger.info('Programando TTL 30s reset por invalidación huérfana', {
+        phoneKey: conv.key,
+        phone,
+        invalidatedAt: new Date(conv.metadata.invalidatedAt).toISOString(),
+        expectedVersionAfterTTL: invalidationVersionAtSchedule,
+        action: 'conversation_invalidation_ttl_scheduled',
+        file: callerFile
+    })
+
+    conv.metadata.invalidationTimer = setTimeout(() => {
+        try {
+            // Si el timer vence y la versión SIGUE SIENDO LA MISMA que cuando se invalidó
+            // significa que NADIE vino a rescatar ni a responder → huérfana confirmada → RESET COMPLETO.
+            const stillSameVersion = Number(conv.version || 0) === invalidationVersionAtSchedule
+            defaultLogger.info('TTL 30s invalidación vence, check versión...', {
+                phoneKey: conv.key,
+                phone,
+                currentVersion: Number(conv.version || 0),
+                expectedVersionAtSchedule: invalidationVersionAtSchedule,
+                stillSameVersion,
+                meaningfulCount: (conv.messages.filter(m => isValidType(m.type))).length,
+                action: 'conversation_invalidation_ttl_fired',
+                file: callerFile
+            })
+            if (stillSameVersion) {
+                clearInvalidationTimer(conv)
+                conv.metadata.invalidationVersionExpected = 0
+                conv.metadata.invalidatedAt = 0
+                conv.messages = []
+                conv.version = 0
+                conv.lastActivityAt = 0
+                defaultLogger.info('Conversación reseteada por TTL 30s invalidación huérfana', {
+                    phoneKey: conv.key,
+                    phone,
+                    versionResetFrom: invalidationVersionAtSchedule,
+                    action: 'conversation_invalidation_ttl_reset_done',
+                    file: callerFile
+                })
+            }
+        } catch (err) {
+            defaultLogger.error('Error en TTL invalidación reset', {
+                phoneKey: conv?.key,
+                phone,
+                error: err.message,
+                action: 'conversation_invalidation_ttl_error',
+                file: callerFile
+            })
+        }
+    }, INVALIDATION_RESET_TTL_MS)
+}
 
 const normalizeKey = (phone) => {
     // Quitar dominio @s.whatsapp.net si viniera (defensa)
@@ -54,7 +157,11 @@ const ensureConversation = (phone) => {
             version: 0,
             lastActivityAt: 0,
             messages: [], // { id, messageId, type, content, status: 'pending'|'ready', caption, receivedAt, processedAt, extra }
-            metadata: {},
+            metadata: {
+                invalidatedAt: 0,
+                invalidationVersionExpected: 0,
+                invalidationTimer: null
+            },
             cleanupTimer: null
         })
     }
@@ -190,6 +297,70 @@ export const addReceivedMessage = (phone, {
 
     const conv = ensureConversation(phone)
     const id = String(messageId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
+
+    // ============================================================
+    // Fix C: GREETINGS + ORPHAN RESET ANTES DE INSERTAR NUEVO MENSAJE
+    // Si la conversación está huérfana:
+    //   - tiene metadata.invalidatedAt (hubo una invalidación)
+    //   - O han pasado más de GREETINGS_ORPHAN_RESET_MS (2min) desde lastActivityAt
+    //     Y el usuario ESCRIBE UN SALUDO (hola/buenos dias/que tal/etc.)
+    // → Hacemos RESET COMPLETO ANTES de insertar este nuevo mensaje
+    //   para que empiece desde cero sin desfase de versión.
+    // ============================================================
+    const now = Date.now()
+    const greetingsText = (typeNorm === 'text') ? String(content || '') : ''
+    const hasOldInvalidation = !!(conv.metadata && conv.metadata.invalidatedAt && (now - Number(conv.metadata.invalidatedAt)) >= INVALIDATION_RESET_TTL_MS)
+    const hasOrphanExpired = (conv.messages.length > 0 && conv.lastActivityAt && (now - conv.lastActivityAt) >= GREETINGS_ORPHAN_RESET_MS)
+    const isGreeting = isGreetingText(greetingsText)
+    const shouldResetBeforeInsert = (conv.version > 0 && conv.messages.length > 0 && (
+        hasOldInvalidation || (hasOrphanExpired && isGreeting)
+    ))
+
+    if (shouldResetBeforeInsert) {
+        clearInvalidationTimer(conv)
+        defaultLogger.info('Reset de conversación HUÉRFANA antes de insertar nuevo mensaje', {
+            phoneKey: conv.key,
+            phone,
+            whyResetBecause: [
+                hasOldInvalidation ? 'old_invalidation_expired' : null,
+                (hasOrphanExpired && isGreeting) ? 'greeting_after_orphan_expired' : null
+            ].filter(Boolean).join('+'),
+            hasOldInvalidation,
+            hasOrphanExpired,
+            isGreeting,
+            greetingsText: greetingsText ? greetingsText.slice(0, 100) : '',
+            versionBeforeReset: conv.version,
+            messagesBeforeResetCount: conv.messages.length,
+            lastActivityAt: conv.lastActivityAt ? new Date(conv.lastActivityAt).toISOString() : null,
+            invalidatedAt: conv.metadata?.invalidatedAt ? new Date(conv.metadata.invalidatedAt).toISOString() : null,
+            action: 'conversation_orphan_reset_before_insert',
+            file
+        })
+        conv.metadata.invalidatedAt = 0
+        conv.metadata.invalidationVersionExpected = 0
+        conv.messages = []
+        conv.version = 0
+        conv.lastActivityAt = 0
+    }
+
+    // ============================================================
+    // Cancelar timer TTL invalidación cuando LLEGA NUEVA ACTIVIDAD VÁLIDA.
+    // Si había un timer de reset programado porque antes y ahora viene un nuevo mensaje
+    // significa que el usuario sigue interactuando (o hay flows vivos.
+    // No hay que resetear nada: cancelar el timer.
+    // ============================================================
+    if (!shouldResetBeforeInsert && conv.metadata && conv.metadata.invalidationTimer) {
+        defaultLogger.info('Cancelado TTL invalidación por nueva actividad válida', {
+            phoneKey: conv.key,
+            phone,
+            incomingType: typeNorm,
+            action: 'conversation_invalidation_ttl_cancelled_by_activity',
+            file
+        })
+        clearInvalidationTimer(conv)
+        conv.metadata.invalidatedAt = 0
+        conv.metadata.invalidationVersionExpected = 0
+    }
 
     // DESDUPLICACIÓN por messageId (previene re-emisiones de Baileys/BuilderBot)
     const existing = conv.messages.find(m => m.messageId === id || m.id === id)
@@ -423,7 +594,60 @@ export const waitForTurn = async (phone, {
         const now = Date.now()
 
         // Verificación de versión: si el flujo no corresponde a la última versión → ceder inmediatamente.
+        // ANTES de ceder → ORPHAN RESCUE (Fix A): ¿Está huérfana ya nadie la va a procesar?
         if (Number(flowVersion || 0) !== Number(conv.version)) {
+            // ============================================================
+            // Fix A: ORPHAN RESCUE — ANTES DE CEDER, check si la conversación
+            // está "muerta" (todos meaningful ready + 45s silencio transcurrido).
+            //
+            // Si SÍ → aunque mi versión no sea la actual, me hago cargo
+            // de responder con los mensajes acumulados. De lo contrario,
+            // BuilderBot podría no haber creado un flujo para la nueva
+            // versión (no disparó EVENTS.WELCOME/MEDIA/VOICE_NOTE) y la
+            // conversación quedaría huérfana en limbo PARA SIEMPRE.
+            // ============================================================
+            const meaningfulMessagesCurr = conv.messages.filter(m => isValidType(m.type))
+            const anyPendingMeaningfulCurr = meaningfulMessagesCurr.some(m => m.status === 'pending')
+            const allReadyMeaningfulCurr = meaningfulMessagesCurr.length > 0 && !anyPendingMeaningfulCurr
+            const silenceElapsedCurr = conv.lastActivityAt ? (now - conv.lastActivityAt) : 0
+            const silenceCompletedCurr = silenceElapsedCurr >= SILENCE_WINDOW_MS
+
+            if (meaningfulMessagesCurr.length > 0 && allReadyMeaningfulCurr && silenceCompletedCurr) {
+                const combinedInput = buildCombinedInput(phone, { file })
+                defaultLogger.warn('ORPHAN RESCUE: flujo versión vieja rescata conversación huérfana y responde', {
+                    phoneKey, phone,
+                    flowType, flowId,
+                    flowVersion, currentVersion: conv.version,
+                    bufferCount: conv.messages.length,
+                    meaningfulCount: meaningfulMessagesCurr.length,
+                    bufferTypes: meaningfulMessagesCurr.map(m => m.type),
+                    silenceElapsedMs: silenceElapsedCurr,
+                    combinedLength: String(combinedInput || '').length,
+                    action: 'conversation_orphan_rescue_acquired',
+                    file
+                })
+                // Cancelar cualquier timer de invalidación programado (ya se va a responder).
+                clearInvalidationTimer(conv)
+                if (conv.metadata) {
+                    conv.metadata.invalidatedAt = 0
+                    conv.metadata.invalidationVersionExpected = 0
+                }
+                return {
+                    acquired: true,
+                    cancelReason: null,
+                    combinedInput,
+                    finalVersion: conv.version,
+                    orphanRescue: true
+                }
+            }
+
+            // ============================================================
+            // Fix B: PROGRAMAR TTL RESET si NO rescate huérfano (ceder real).
+            // Si nadie más va a venir a procesar esta conversación,
+            // en 30s se hará reset COMPLETO.
+            // ============================================================
+            scheduleInvalidationReset(conv, phoneKey, phone, file)
+
             defaultLogger.info('Flujo invalidado por versión (cede turno)', {
                 phoneKey,
                 phone,
@@ -432,6 +656,12 @@ export const waitForTurn = async (phone, {
                 flowVersion,
                 currentVersion: conv.version,
                 bufferCount: conv.messages.length,
+                meaningfulCount: meaningfulMessagesCurr.length,
+                allReadyMeaningful: allReadyMeaningfulCurr,
+                silenceElapsedMs: silenceElapsedCurr,
+                silenceCompletedCurr,
+                invalidationTtlScheduled: Boolean(conv.metadata?.invalidationTimer),
+                invalidationExpectedVersion: conv.metadata?.invalidationVersionExpected || 0,
                 action: 'conversation_invalidated_version_mismatch',
                 file
             })
@@ -620,6 +850,9 @@ export const isStillMyTurn = (phone, { flowVersion, file = 'conversationBuffer.j
  * Limpiar buffer ÚNICAMENTE después de que la respuesta se envió con éxito.
  * Elimina TODOS los mensajes acumulados de la conversación (todos los que
  * se procesaron en este bloque) y resetea lastActivityAt/version a 0.
+ *
+ * También limpia cualquier timer de invalidación huérfana (ya que la respuesta
+ * fue enviada con éxito, no hay nada que rescatar ni resetear).
  */
 export const clearConversationAfterResponse = (phone, {
     finalVersion,
@@ -628,6 +861,18 @@ export const clearConversationAfterResponse = (phone, {
     const conv = ensureConversation(phone)
     const removedCount = conv.messages.length
     conv.messages = []
+
+    // ============================================================
+    // Fix D: Cancelar timer TTL invalidación después de RESPUESTA EXITOSA.
+    // Cuando se envía respuesta con éxito: NO hay conversación huérfana,
+    // no hay desfase, cualquier timer programado se cancela.
+    // ============================================================
+    clearInvalidationTimer(conv)
+    if (conv.metadata) {
+        conv.metadata.invalidatedAt = 0
+        conv.metadata.invalidationVersionExpected = 0
+    }
+
     // Solo si la versión actual coincide con la respondida, resetear última actividad.
     // Si entre que respondimos y el clear llegó otro mensaje (aunque sea raro por la 2ª validación),
     // conservar estado para no perderlo.
@@ -641,6 +886,7 @@ export const clearConversationAfterResponse = (phone, {
         removedCount,
         finalVersion,
         currentVersion: conv.version,
+        invalidationTimerCancelled: !(conv.metadata && conv.metadata.invalidationTimer),
         action: 'conversation_cleared_after_response',
         file
     })
