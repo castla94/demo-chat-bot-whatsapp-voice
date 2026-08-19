@@ -22,7 +22,8 @@ import {
     clearConversationAfterResponse,
     getConversationState,
     getCurrentVersion,
-    consumeLatestPendingOfType
+    consumeLatestPendingOfType,
+    waitForMyMessageEntryInBuffer
 } from '../helpers/conversationBuffer.js';
 
 
@@ -175,21 +176,33 @@ export const media = addKeyword(EVENTS.MEDIA)
             })
 
             // ================ COORDINACIÓN COMPARTIDA ================
-            // REGLA SIMPLIFICADA (igual que chatbot/voice):
-            //   ÚNICAMENTE el listener Baileys inserta en el buffer.
-            //   Este flujo SOLO LEE versión actual y entryId del último image PENDING.
-            const myVersion = getCurrentVersion(numberPhone)
-            let pendingImage = consumeLatestPendingOfType(numberPhone, 'image')
+            // ✅ NUEVA LÓGICA: esperar a que ESTE mensaje esté en el buffer
+            // (por race condition nuestro listener Baileys puede correrse DESPUÉS de BBot).
+            // Cuando encontramos la entry de IMAGEN propia → tomamos entry.version como flowVersion.
+            const {
+                version: myVersion,
+                entryId: myImageEntryId,
+                matchedBy: myMatchType
+            } = await waitForMyMessageEntryInBuffer(numberPhone, {
+                type: 'image',
+                messageId: ctx?.key?.id || null,
+                contentCandidate: String(mediaCaption || ''),
+                file: 'media.js'
+            })
+            let pendingImage = myImageEntryId ? { entryId: myImageEntryId } : consumeLatestPendingOfType(numberPhone, 'image')
             const convStateBefore = getConversationState(numberPhone)
-            defaultLogger.info('Conversación compartida (imagen - solo lectura)', {
+            defaultLogger.info('Conversación compartida (imagen - snapshot después de encontrar mi entry)', {
                 userId, numberPhone, name,
                 phoneKey: convStateBefore.phoneKey,
                 myVersion,
+                myImageEntryId,
+                myMatchType,
                 pendingImageEntryId: pendingImage ? pendingImage.entryId : null,
                 pendingImageMessageId: pendingImage ? pendingImage.messageId : null,
                 pendingImageReceivedAt: pendingImage && pendingImage.receivedAt ? new Date(pendingImage.receivedAt).toISOString() : null,
                 currentVersion: convStateBefore.version,
                 bufferCount: convStateBefore.bufferCount,
+                meaningfulCount: convStateBefore.meaningfulCount,
                 bufferTypes: convStateBefore.bufferTypes,
                 lastActivityAt: convStateBefore.lastActivityAt ? new Date(convStateBefore.lastActivityAt).toISOString() : null,
                 mediaCaption: String(mediaCaption || '').slice(0, 100),

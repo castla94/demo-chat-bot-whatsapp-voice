@@ -23,7 +23,8 @@ import {
     clearConversationAfterResponse,
     buildCombinedInput,
     getConversationState,
-    getCurrentVersion
+    getCurrentVersion,
+    waitForMyMessageEntryInBuffer
 } from '../helpers/conversationBuffer.js'
 
 // Constantes de configuración
@@ -117,19 +118,33 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             })
 
             // ================ COORDINACIÓN COMPARTIDA ================
-            // REGLA SIMPLIFICADA:
-            //   ÚNICAMENTE el listener Baileys PRE-BuilderBot inserta mensajes.
-            //   Este flujo solo LEER la versión actual → esta será su flowVersion.
-            const myVersion = getCurrentVersion(numberPhone)
+            // ✅ NUEVA LÓGICA: esperar a que ESTE mensaje esté en el buffer
+            // (por race condition, nuestro listener Baileys addReceivedFromRawMessage
+            //  puede correrse DESPUÉS de BuilderBot addAction).
+            // Cuando encontramos nuestra propia entry en conv.messages → tomamos
+            // entry.version como flowVersion. Así SIN DESFASE sin importar orden.
+            const {
+                version: myVersion,
+                entryId: myConversationEntryId,
+                matchedBy: myMatchType
+            } = await waitForMyMessageEntryInBuffer(numberPhone, {
+                type: 'text',
+                messageId: ctx?.key?.id || null,
+                contentCandidate: String(ctx.body || ''),
+                file: 'chatbot.js'
+            })
             const convStateBefore = getConversationState(numberPhone)
-            defaultLogger.info('Conversación compartida (texto - solo lectura)', {
+            defaultLogger.info('Conversación compartida (texto - snapshot después de encontrar mi entry)', {
                 userId,
                 numberPhone,
                 name,
                 phoneKey: convStateBefore.phoneKey,
                 myVersion,
+                myConversationEntryId,
+                myMatchType,
                 currentVersion: convStateBefore.version,
                 bufferCount: convStateBefore.bufferCount,
+                meaningfulCount: convStateBefore.meaningfulCount,
                 bufferTypes: convStateBefore.bufferTypes,
                 lastActivityAt: convStateBefore.lastActivityAt ? new Date(convStateBefore.lastActivityAt).toISOString() : null,
                 action: 'conversation_flow_init_text',
@@ -139,6 +154,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             await state.update({
                 ...curr,
                 conversationVersion: myVersion,
+                conversationEntryId: myConversationEntryId || curr?.conversationEntryId || null,
                 conversationPhoneKey: convStateBefore.phoneKey
             })
             // =========================================================

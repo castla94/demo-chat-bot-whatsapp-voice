@@ -26,7 +26,8 @@ import {
     buildCombinedInput,
     getConversationState,
     getCurrentVersion,
-    consumeLatestPendingOfType
+    consumeLatestPendingOfType,
+    waitForMyMessageEntryInBuffer
 } from '../helpers/conversationBuffer.js'
 
  
@@ -118,23 +119,33 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             })
 
             // ================ COORDINACIÓN COMPARTIDA ================
-            // REGLA SIMPLIFICADA:
-            //   ÚNICAMENTE el listener Baileys inserta en el buffer.
-            //   Este flujo solo:
-            //     1) lee versión actual global (flowVersion para reclamar turno luego)
-            //     2) guarda entryId del ÚLTIMO audio PENDING para marcar READY cuando transcriba.
-            const myVersion = getCurrentVersion(numberPhone)
-            let pendingAudio = consumeLatestPendingOfType(numberPhone, 'audio')
+            // ✅ NUEVA LÓGICA: esperar a que ESTE mensaje esté en el buffer
+            // (por race condition nuestro listener Baileys puede correrse DESPUÉS de BBot).
+            // Cuando encontramos la entry de AUDIO propia → tomamos entry.version como flowVersion.
+            const {
+                version: myVersion,
+                entryId: myAudioEntryId,
+                matchedBy: myMatchType
+            } = await waitForMyMessageEntryInBuffer(numberPhone, {
+                type: 'audio',
+                messageId: ctx?.key?.id || null,
+                contentCandidate: '', // audio no tiene contenido de texto directo (lo buscamos por id/type)
+                file: 'voice.js'
+            })
+            let pendingAudio = myAudioEntryId ? { entryId: myAudioEntryId } : consumeLatestPendingOfType(numberPhone, 'audio')
             const convStateBefore = getConversationState(numberPhone)
-            defaultLogger.info('Conversación compartida (audio - solo lectura)', {
+            defaultLogger.info('Conversación compartida (audio - snapshot después de encontrar mi entry)', {
                 userId, numberPhone, name,
                 phoneKey: convStateBefore.phoneKey,
                 myVersion,
+                myAudioEntryId,
+                myMatchType,
                 pendingAudioEntryId: pendingAudio ? pendingAudio.entryId : null,
                 pendingAudioMessageId: pendingAudio ? pendingAudio.messageId : null,
                 pendingAudioReceivedAt: pendingAudio && pendingAudio.receivedAt ? new Date(pendingAudio.receivedAt).toISOString() : null,
                 currentVersion: convStateBefore.version,
                 bufferCount: convStateBefore.bufferCount,
+                meaningfulCount: convStateBefore.meaningfulCount,
                 bufferTypes: convStateBefore.bufferTypes,
                 lastActivityAt: convStateBefore.lastActivityAt ? new Date(convStateBefore.lastActivityAt).toISOString() : null,
                 action: 'conversation_flow_init_audio',

@@ -22,6 +22,31 @@ const POLL_TICK_MS = 1000
 const MAX_WAIT_MS = 15 * 60 * 1000 // hard limit para no colgar polling para siempre
 
 // ============================================================
+// Ventana de ESTABILIZACIÓN por ráfagas de mensajes rápidos.
+// Fix: "envío 2/3/4 mensajes del mismo tipo seguidos y se invalida todo".
+//
+// Cuando el usuario envía mensajes MUY rápido (ej, 4 mensajes de texto seguidos
+// en menos de 1s), los listeners internos de BuilderBot (disparar addKeyword)
+// y NUESTRO listener (addReceivedFromRawMessage) compiten por orden.
+// Un flujo puede nacer con flowVersion desfasado por 1 ó 2 versiones
+// simplemente porque nuestro listener corrió 50ms después.
+//
+// Solución 2 capas:
+//   1) FLOW_VERSION_STABILIZATION_MS = 3000ms: mientras la última actividad
+//      del usuario sea hace <3s NO CEDER POR VERSIÓN DESFASADA.
+//      Dejamos que las versiones se "asienten" en la conversación.
+//      Pasados los 3s → sí ceder normalmente.
+//   2) MY_MESSAGE_ENTRY_WAIT_MS = 4000ms, polling 100ms: cada flow espera
+//      ACTIVAMENTE hasta que SU MENSAJE (el que le disparó) aparezca
+//      en el buffer (por messageId o por contenido match). Cuando lo
+//      encuentra, toma flowVersion = entry.version de ESE mensaje.
+//      Así sin importar el orden de listeners, nace con la correcta.
+// ============================================================
+const FLOW_VERSION_STABILIZATION_MS = 3 * 1000
+const MY_MESSAGE_ENTRY_TICK_MS = 100
+const MY_MESSAGE_ENTRY_WAIT_MS = 4 * 1000
+
+// ============================================================
 // TTL (Time To Live) para invalidaciones por desfase de versión
 // ============================================================
 // Fix DESFASE VERSIÓN HUÉRFANA:
@@ -166,6 +191,166 @@ const ensureConversation = (phone) => {
         })
     }
     return conversations.get(key)
+}
+
+// ============================================================
+// ✅ NUEVA FUNCIÓN: waitForMyMessageEntryInBuffer
+// ============================================================
+// Fix RACE CONDITION (orden de listeners Baileys).
+//
+// Cada flujo BuilderBot (chatbot/voice/media) nace SIN SABER cuál es su
+// propia entry en el buffer (porque el listener de coordinación
+// addReceivedFromRawMessage puede correrse DESPUÉS del addAction de BBot).
+//
+// Solución: el flujo usa esta función para ESPERAR ACTIVAMENTE
+// a que SU PROPIO MENSAJE aparezca en conv.messages, y así tomar
+// flowVersion = entry.version de ESE mensaje (no conv.version general
+// que podría ser más alta por otros mensajes).
+//
+// Busca un mensaje por:
+//   1) MATCH EXACTO por messageId (ctx.key.id): match ideal.
+//   2) FALLBACK: por type coincidente + receivedAt muy cercano (últimos 4s)
+//      + (contentCandidate no vacío = contenido similar).
+//
+// Retorna: { version (entry.version), entryId, messageId, fromCache }
+//   o si timeout -> fallback { version: conv.version }
+// ============================================================
+/**
+ * @param phone string
+ * @param type 'text'|'audio'|'image'
+ * @param messageId string|null ctx.key.id (id del mensaje según BuilderBot/Baileys
+ * @param contentCandidate string|null contenido aprox (ctx.body para texto, caption para image, '' audio)
+ * @param file string caller file for logs
+ */
+export const waitForMyMessageEntryInBuffer = async (phone, {
+    type = 'text',
+    messageId = null,
+    contentCandidate = null,
+    file = 'conversationBuffer.js'
+} = {}) => {
+    const phoneKey = normalizeKey(phone)
+    const conv = ensureConversation(phone)
+    const typeNorm = String(type || '').toLowerCase()
+    const startedAt = Date.now()
+    const idTarget = String(messageId || '').trim()
+    const contentNorm = String(contentCandidate || '').trim()
+
+    defaultLogger.info('waitForMyMessageEntryInBuffer: esperando a que mi mensaje entre al buffer', {
+        phoneKey, phone,
+        type: typeNorm,
+        messageId: idTarget,
+        contentLength: contentNorm.length,
+        contentPreview: contentNorm.slice(0, 100),
+        currentVersionAtStart: conv.version,
+        currentBufferCountAtStart: conv.messages.length,
+        action: 'conversation_wait_my_entry_start',
+        file
+    })
+
+    // Función: buscar en conv.messages mi entry propia.
+    const findMyEntry = () => {
+        // Intento 1: match por messageId
+        if (idTarget) {
+            const byId = conv.messages.find(m =>
+                (String(m.id) === idTarget || String(m.messageId) === idTarget)
+                && (!typeNorm ? String(m.type).toLowerCase() === typeNorm : true)
+            )
+            if (byId) return { entry: byId, matchedBy: 'messageId' }
+        }
+        // Intento 2: match por tipo + receivedAt reciente + contenido similar
+        const recentItems = conv.messages
+            .filter(m => String(m.type).toLowerCase() === typeNorm)
+            .sort((a, b) => Number(b.receivedAt || 0) - Number(a.receivedAt || 0))
+        if (recentItems.length === 0) return null
+        const entry = recentItems[0] // el ÚLTIMO de este tipo
+        const ageMs = startedAt - Number(entry.receivedAt || startedAt)
+        if (ageMs < 0 || ageMs > MY_MESSAGE_ENTRY_WAIT_MS + 1000) return null
+        // Si hay contenido candidato → chequear similaridad
+        if (contentNorm) {
+            const entryContent = String(entry.content || '').trim()
+            const entryCaption = String(entry.caption || '').trim()
+            const matchContent = contentNorm && (
+                entryContent.startsWith(contentNorm.slice(0, 20))
+                || entryCaption.startsWith(contentNorm.slice(0, 20))
+                || contentNorm.startsWith(entryContent.slice(0, 20))
+            )
+            if (!matchContent && entryContent.length > 0) {
+                // No hay contenido de confianza → mirar si solo 1 candidato en ventana
+                const candidatesInWindow = recentItems.filter(m =>
+                    (startedAt - Number(m.receivedAt || startedAt)) >= -500
+                    && (startedAt - Number(m.receivedAt || startedAt)) <= MY_MESSAGE_ENTRY_WAIT_MS + 1000
+                )
+                if (candidatesInWindow.length === 1) {
+                    return { entry: candidatesInWindow[0], matchedBy: 'onlyRecentCandidateInWindow' }
+                }
+                return null
+            }
+        }
+        return { entry, matchedBy: 'recentTypeMatch' }
+    }
+
+    let lastFoundLog = 0
+    while (true) {
+        const now = Date.now()
+        const found = findMyEntry()
+        if (found) {
+            defaultLogger.info('waitForMyMessageEntryInBuffer: encontrada mi entry en buffer', {
+                phoneKey, phone,
+                type: typeNorm,
+                waitedMs: now - startedAt,
+                matchedBy: found.matchedBy,
+                myVersion: Number(found.entry.version),
+                myEntryId: found.entry.id,
+                myMessageId: found.entry.messageId,
+                receivedAt: new Date(found.entry.receivedAt || 0).toISOString(),
+                bufferCountNow: conv.messages.length,
+                currentGlobalVersionNow: conv.version,
+                action: 'conversation_wait_my_entry_found',
+                file
+            })
+            return {
+                version: Number(found.entry.version),
+                entryId: found.entry.id,
+                messageId: found.entry.messageId,
+                matchedBy: found.matchedBy
+            }
+        }
+        // Timeout → retornar fallback de conv.version + warn
+        if ((now - startedAt) >= MY_MESSAGE_ENTRY_WAIT_MS) {
+            const fallbackVersion = conv.version || 0
+            defaultLogger.warn('waitForMyMessageEntryInBuffer: TIMEOUT. Fallback a conv.version actual', {
+                phoneKey, phone,
+                type: typeNorm,
+                waitedMs: MY_MESSAGE_ENTRY_WAIT_MS,
+                fallbackVersion,
+                bufferCountNow: conv.messages.length,
+                messageId: idTarget,
+                contentPreview: contentNorm.slice(0, 100),
+                action: 'conversation_wait_my_entry_timeout_fallback',
+                file
+            })
+            return {
+                version: Number(fallbackVersion),
+                entryId: null,
+                messageId: idTarget || null,
+                matchedBy: 'timeout_fallback_global_version'
+            }
+        }
+        // Log cada ~1s
+        if (!lastFoundLog || (now - lastFoundLog) > 1000) {
+            lastFoundLog = now
+            defaultLogger.debug('waitForMyMessageEntryInBuffer: esperando siguiente tick', {
+                phoneKey, phone,
+                type: typeNorm,
+                waitedMs: now - startedAt,
+                remainingMs: MY_MESSAGE_ENTRY_WAIT_MS - (now - startedAt),
+                currentBufferCount: conv.messages.length,
+                action: 'conversation_wait_my_entry_tick',
+                file
+            })
+        }
+        await new Promise(res => setTimeout(res, MY_MESSAGE_ENTRY_TICK_MS))
+    }
 }
 
 /**
@@ -595,7 +780,36 @@ export const waitForTurn = async (phone, {
 
         // Verificación de versión: si el flujo no corresponde a la última versión → ceder inmediatamente.
         // ANTES de ceder → ORPHAN RESCUE (Fix A): ¿Está huérfana ya nadie la va a procesar?
+        // ADEMÁS: VENTANA DE ESTABILIZACIÓN (nuevo Fix): si lastActivityAt < 3s → NO CEDER.
+        //   Cuando el usuario envía mensajes MUY rápido (2-3 en <1s), la versión está desfasada
+        //   temporalmente. Esperamos a que se estabilice.
         if (Number(flowVersion || 0) !== Number(conv.version)) {
+            // ============================================================
+            // Fix STABILIZATION: último mensaje hace MENOS DE 3s?
+            // → NO CEDER, NO INVALIDAR, NO RESET, NO PROGRAMAR TTL RESET.
+            //   Simplemente seguir haciendo polling normalmente (se salta la condición actual).
+            // ============================================================
+            const sinceLastActivity = conv.lastActivityAt ? (now - conv.lastActivityAt) : FLOW_VERSION_STABILIZATION_MS + 1
+            if (sinceLastActivity < FLOW_VERSION_STABILIZATION_MS) {
+                // Log de estabilización SOLO cada ~1s para no inundar
+                if (!lastLogAt || (now - lastLogAt) > 1000) {
+                    lastLogAt = now
+                    defaultLogger.debug('Flujo con versión desfasada PERO en ventana estabilización <3s: no cede, sigue polling', {
+                        phoneKey, phone,
+                        flowType, flowId,
+                        flowVersion,
+                        currentVersion: conv.version,
+                        sinceLastActivityMs: sinceLastActivity,
+                        stabilizationMs: FLOW_VERSION_STABILIZATION_MS,
+                        bufferCount: conv.messages.length,
+                        action: 'conversation_invalidation_skipped_stabilization_window',
+                        file
+                    })
+                }
+                // Saltar ceder: continue polling (siguiente tick)
+                // Hard timeout de seguridad (MAX_WAIT_MS) sigue corriendo.
+            } else {
+
             // ============================================================
             // Fix A: ORPHAN RESCUE — ANTES DE CEDER, check si la conversación
             // está "muerta" (todos meaningful ready + 45s silencio transcurrido).
@@ -671,6 +885,7 @@ export const waitForTurn = async (phone, {
                 combinedInput: null,
                 finalVersion: conv.version
             }
+            } // cierre else (última actividad >= 3s, sí se cede)
         }
 
         const silenceElapsed = conv.lastActivityAt ? (now - conv.lastActivityAt) : 0
