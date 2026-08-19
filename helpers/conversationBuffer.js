@@ -187,10 +187,32 @@ const ensureConversation = (phone) => {
                 invalidationVersionExpected: 0,
                 invalidationTimer: null
             },
-            cleanupTimer: null
+            cleanupTimer: null,
+            // ============================================================
+            // turnAcquiredLock: previene 2 calls run() duplicadas.
+            // Cuando un flujo (mismo tipo u otro) ADQUIERE el turno (allReady + 45s)
+            // se marca turnAcquiredLock = { flowId, flowType, flowVersion, at }.
+            // Cualquier otro flujo que intente adquirir después (incluso mismo tipo,
+            // antes de que se haga clearConversationAfterResponse) → NO adquiere y cede.
+            // Se limpia en clearConversationAfterResponse() o MAX_WAIT_MS timeout.
+            // ============================================================
+            turnAcquiredLock: null
         })
     }
     return conversations.get(key)
+}
+
+/**
+ * Helper: devuelve el ÚLTIMO mensaje (por receivedAt desc) de TIPOS SOPORTADOS
+ * (text/audio/image). No cuenta stickers, documents, videos, etc.
+ * Si no hay -> null.
+ */
+const getLastMeaningfulMessage = (conv) => {
+    if (!conv || !conv.messages || conv.messages.length === 0) return null
+    const meaningful = conv.messages.filter(m => isValidType(m.type))
+    if (meaningful.length === 0) return null
+    meaningful.sort((a, b) => Number(b.receivedAt || 0) - Number(a.receivedAt || 0))
+    return meaningful[0]
 }
 
 // ============================================================
@@ -778,47 +800,62 @@ export const waitForTurn = async (phone, {
     while (true) {
         const now = Date.now()
 
-        // Verificación de versión: si el flujo no corresponde a la última versión → ceder inmediatamente.
-        // ANTES de ceder → ORPHAN RESCUE (Fix A): ¿Está huérfana ya nadie la va a procesar?
-        // ADEMÁS: VENTANA DE ESTABILIZACIÓN (nuevo Fix): si lastActivityAt < 3s → NO CEDER.
-        //   Cuando el usuario envía mensajes MUY rápido (2-3 en <1s), la versión está desfasada
-        //   temporalmente. Esperamos a que se estabilice.
-        if (Number(flowVersion || 0) !== Number(conv.version)) {
-            // ============================================================
-            // Fix STABILIZATION: último mensaje hace MENOS DE 3s?
-            // → NO CEDER, NO INVALIDAR, NO RESET, NO PROGRAMAR TTL RESET.
-            //   Simplemente seguir haciendo polling normalmente (se salta la condición actual).
-            // ============================================================
-            const sinceLastActivity = conv.lastActivityAt ? (now - conv.lastActivityAt) : FLOW_VERSION_STABILIZATION_MS + 1
-            if (sinceLastActivity < FLOW_VERSION_STABILIZATION_MS) {
-                // Log de estabilización SOLO cada ~1s para no inundar
+        // ============================================================
+        // NUEVA REGLA DE INVALIDACIÓN (POR TIPO DE MENSAJE, NO POR VERSIÓN):
+        //
+        //  🟢 MISMO TIPO que el ÚLTIMO mensaje (text→text, audio→audio, image→image):
+        //     NUNCA INVALIDAR, NUNCA CEDER, NUNCA PROGRAMAR TTL.
+        //     Esperar hasta 45s silencio y responder combinado.
+        //
+        //  🔴 TIPO DISTINTO que el ÚLTIMO mensaje (text→image, audio→text, etc):
+        //     SÍ INVALIDAR (ceder) + ORPHAN RESCUE si corresponde.
+        //
+        // La ventana de estabilización 3s sigue aplicando: si la última actividad
+        // es <3s y TIPO DISTINTO, esperamos a ver si el usuario sigue escribiendo
+        // (evitamos invalidar texto por una imagen que llegó 0.5s después y luego
+        //  otro texto 1s después → 3 cambios de tipo en 2s).
+        // ============================================================
+        const lastMeaningful = getLastMeaningfulMessage(conv)
+        const lastMeaningfulType = lastMeaningful ? String(lastMeaningful.type).toLowerCase() : null
+        const flowTypeNorm = String(flowType || '').toLowerCase()
+        const sinceLastActivity = conv.lastActivityAt ? (now - conv.lastActivityAt) : FLOW_VERSION_STABILIZATION_MS + 1
+        const inStabilizationWindow = sinceLastActivity < FLOW_VERSION_STABILIZATION_MS
+
+        let shouldCede = false
+        let cedeReason = null
+
+        if (lastMeaningfulType && flowTypeNorm && (flowTypeNorm !== lastMeaningfulType)) {
+            // TIPO DISTINTO al último mensaje significativo.
+            if (inStabilizationWindow) {
+                // pero <3s de la última actividad: NO CEDER TODAVÍA (ventana estabilización)
                 if (!lastLogAt || (now - lastLogAt) > 1000) {
                     lastLogAt = now
-                    defaultLogger.debug('Flujo con versión desfasada PERO en ventana estabilización <3s: no cede, sigue polling', {
+                    defaultLogger.debug('Flujo TIPO DISTINTO pero <3s de última actividad: no cede (ventana estabilización)', {
                         phoneKey, phone,
-                        flowType, flowId,
-                        flowVersion,
-                        currentVersion: conv.version,
+                        flowType: flowTypeNorm,
+                        lastType: lastMeaningfulType,
                         sinceLastActivityMs: sinceLastActivity,
-                        stabilizationMs: FLOW_VERSION_STABILIZATION_MS,
-                        bufferCount: conv.messages.length,
+                        flowVersion, currentVersion: conv.version,
                         action: 'conversation_invalidation_skipped_stabilization_window',
                         file
                     })
                 }
-                // Saltar ceder: continue polling (siguiente tick)
-                // Hard timeout de seguridad (MAX_WAIT_MS) sigue corriendo.
+                // skip cede → continue con abajo (acquire check)
+                shouldCede = false
             } else {
+                shouldCede = true
+                cedeReason = 'different_type_from_last_message'
+            }
+        } else {
+            // MISMO TIPO o sin mensajes todavía → NO CEDER NUNCA.
+            // Incluso aunque flowVersion sea 1 y conv.version sea 5 (textos 2,3,4).
+            // El flujo TEXTO1 original sigue vivo para esperar los 45s y responder.
+            shouldCede = false
+        }
 
+        if (shouldCede) {
             // ============================================================
-            // Fix A: ORPHAN RESCUE — ANTES DE CEDER, check si la conversación
-            // está "muerta" (todos meaningful ready + 45s silencio transcurrido).
-            //
-            // Si SÍ → aunque mi versión no sea la actual, me hago cargo
-            // de responder con los mensajes acumulados. De lo contrario,
-            // BuilderBot podría no haber creado un flujo para la nueva
-            // versión (no disparó EVENTS.WELCOME/MEDIA/VOICE_NOTE) y la
-            // conversación quedaría huérfana en limbo PARA SIEMPRE.
+            // ORPHAN RESCUE antes de ceder (igual que antes, pero ahora POR TIPO).
             // ============================================================
             const meaningfulMessagesCurr = conv.messages.filter(m => isValidType(m.type))
             const anyPendingMeaningfulCurr = meaningfulMessagesCurr.some(m => m.status === 'pending')
@@ -828,9 +865,11 @@ export const waitForTurn = async (phone, {
 
             if (meaningfulMessagesCurr.length > 0 && allReadyMeaningfulCurr && silenceCompletedCurr) {
                 const combinedInput = buildCombinedInput(phone, { file })
-                defaultLogger.warn('ORPHAN RESCUE: flujo versión vieja rescata conversación huérfana y responde', {
+                defaultLogger.warn('ORPHAN RESCUE (por tipo): flujo tipo viejo rescata conversación huérfana y responde', {
                     phoneKey, phone,
-                    flowType, flowId,
+                    flowType: flowTypeNorm,
+                    lastType: lastMeaningfulType,
+                    flowId,
                     flowVersion, currentVersion: conv.version,
                     bufferCount: conv.messages.length,
                     meaningfulCount: meaningfulMessagesCurr.length,
@@ -840,7 +879,6 @@ export const waitForTurn = async (phone, {
                     action: 'conversation_orphan_rescue_acquired',
                     file
                 })
-                // Cancelar cualquier timer de invalidación programado (ya se va a responder).
                 clearInvalidationTimer(conv)
                 if (conv.metadata) {
                     conv.metadata.invalidatedAt = 0
@@ -856,36 +894,33 @@ export const waitForTurn = async (phone, {
             }
 
             // ============================================================
-            // Fix B: PROGRAMAR TTL RESET si NO rescate huérfano (ceder real).
-            // Si nadie más va a venir a procesar esta conversación,
-            // en 30s se hará reset COMPLETO.
+            // PROGRAMAR TTL 30s reset (si nadie vino en 30s → resetear).
             // ============================================================
             scheduleInvalidationReset(conv, phoneKey, phone, file)
 
-            defaultLogger.info('Flujo invalidado por versión (cede turno)', {
+            defaultLogger.info('Flujo invalidado CEDIDO por TIPO DISTINTO al último mensaje (nuevo tipo vigente)', {
                 phoneKey,
                 phone,
-                flowType,
+                flowType: flowTypeNorm,
+                lastType: lastMeaningfulType,
                 flowId,
                 flowVersion,
                 currentVersion: conv.version,
                 bufferCount: conv.messages.length,
-                meaningfulCount: meaningfulMessagesCurr.length,
-                allReadyMeaningful: allReadyMeaningfulCurr,
-                silenceElapsedMs: silenceElapsedCurr,
-                silenceCompletedCurr,
+                meaningfulCount: (conv.messages.filter(m => isValidType(m.type))).length,
+                cedeReason,
+                sinceLastActivityMs: sinceLastActivity,
                 invalidationTtlScheduled: Boolean(conv.metadata?.invalidationTimer),
                 invalidationExpectedVersion: conv.metadata?.invalidationVersionExpected || 0,
-                action: 'conversation_invalidated_version_mismatch',
+                action: 'conversation_invalidated_different_type',
                 file
             })
             return {
                 acquired: false,
-                cancelReason: 'version_mismatch',
+                cancelReason: cedeReason || 'different_type_from_last_message',
                 combinedInput: null,
                 finalVersion: conv.version
             }
-            } // cierre else (última actividad >= 3s, sí se cede)
         }
 
         const silenceElapsed = conv.lastActivityAt ? (now - conv.lastActivityAt) : 0
@@ -916,10 +951,13 @@ export const waitForTurn = async (phone, {
             defaultLogger.debug('Flujo esperando turno (polling)', {
                 phoneKey,
                 phone,
-                flowType,
+                flowType: flowTypeNorm,
+                lastType: lastMeaningfulType,
                 flowId,
                 flowVersion,
                 currentVersion: conv.version,
+                inStabilizationWindow,
+                sinceLastActivityMs: sinceLastActivity,
                 bufferCount: conv.messages.length,
                 meaningfulCount: meaningfulMessages.length,
                 unsupportedCount: conv.messages.length - meaningfulMessages.length,
@@ -929,22 +967,58 @@ export const waitForTurn = async (phone, {
                 anyPendingMeaningful,
                 silenceElapsedMs: silenceElapsed,
                 remainingSilenceMs: Math.max(0, SILENCE_WINDOW_MS - silenceElapsed),
+                // info turn lock
+                turnAcquiredByOther: Boolean(conv.turnAcquiredLock),
+                turnLockOwnerFlowId: conv.turnAcquiredLock?.flowId || null,
+                turnLockOwnerType: conv.turnAcquiredLock?.flowType || null,
                 action: 'conversation_polling_wait',
                 file
             })
         }
 
+        // ============================================================
+        // TURNO DUPLICADO PROTECCIÓN (turnAcquiredLock):
+        //   Si otro flujo (mismo tipo o distinto) YA ADQUIRIÓ el turno previamente
+        //   y está procesando IA / enviando / esperando clearConversation →
+        //   ESTE flujo cede inmediatamente para no duplicar respuesta.
+        // ============================================================
+        if (conv.turnAcquiredLock) {
+            defaultLogger.info('Flujo NO adquiere turno: otro flujo ya lo adquirió (turnAcquiredLock)', {
+                phoneKey, phone,
+                flowType: flowTypeNorm,
+                flowId,
+                myFlowVersion: flowVersion,
+                turnLockOwnerFlowId: conv.turnAcquiredLock?.flowId,
+                turnLockOwnerType: conv.turnAcquiredLock?.flowType,
+                turnLockOwnerVersion: conv.turnAcquiredLock?.flowVersion,
+                turnLockAt: conv.turnAcquiredLock?.at ? new Date(conv.turnAcquiredLock.at).toISOString() : null,
+                action: 'conversation_ceded_turn_already_acquired',
+                file
+            })
+            return {
+                acquired: false,
+                cancelReason: 'turn_already_acquired_other_flow',
+                combinedInput: null,
+                finalVersion: conv.version
+            }
+        }
+
         // Condición de adquirir turno:
-        //   - soy la versión vigente (check arriba)
+        //   - soy el tipo vigente (ya no hay shouldCede arriba)
         //   - meaningfulMessages no vacío (al menos 1 text/audio/image)
         //   - todos los meaningful están ready
         //   - silenceCompleted
         if (meaningfulMessages.length > 0 && allReadyMeaningful && silenceCompleted) {
+            // MARCAR LOCK antes de construir combined.
+            conv.turnAcquiredLock = {
+                flowId, flowType: flowTypeNorm, flowVersion, at: now
+            }
             const combinedInput = buildCombinedInput(phone, { file })
             defaultLogger.info('Flujo ADQUIERE turno y construye contexto combinado', {
                 phoneKey,
                 phone,
-                flowType,
+                flowType: flowTypeNorm,
+                lastType: lastMeaningfulType,
                 flowId,
                 flowVersion,
                 currentVersion: conv.version,
@@ -953,6 +1027,7 @@ export const waitForTurn = async (phone, {
                 bufferTypes: meaningfulMessages.map(m => m.type),
                 silenceElapsedMs: silenceElapsed,
                 combinedLength: String(combinedInput || '').length,
+                turnLockAcquired: true,
                 action: 'conversation_turn_acquired',
                 file
             })
@@ -966,6 +1041,15 @@ export const waitForTurn = async (phone, {
 
         // Hard timeout de seguridad (15min) para no dejar polling colgado infinitamente.
         if ((now - startedAt) > MAX_WAIT_MS) {
+            // Antes de salir por timeout: limpiar lock turno si SOY el dueño (no limpiar de otros).
+            if (conv.turnAcquiredLock && conv.turnAcquiredLock.flowId === flowId) {
+                conv.turnAcquiredLock = null
+                defaultLogger.info('MAX WAIT TIMEOUT: limpié turnAcquiredLock propio por seguridad', {
+                    phoneKey, phone, flowId, flowTypeNorm: String(flowType||'').toLowerCase(),
+                    action: 'conversation_polling_timeout_cleared_own_lock',
+                    file
+                })
+            }
             defaultLogger.warn('Flujo cancelado por timeout máximo de polling', {
                 phoneKey,
                 phone,
@@ -975,6 +1059,8 @@ export const waitForTurn = async (phone, {
                 currentVersion: conv.version,
                 waitedMs: now - startedAt,
                 maxWaitMs: MAX_WAIT_MS,
+                // info lock final
+                turnLockOwnerFlowId: conv.turnAcquiredLock?.flowId || null,
                 action: 'conversation_polling_timeout',
                 file
             })
@@ -1088,6 +1174,10 @@ export const clearConversationAfterResponse = (phone, {
         conv.metadata.invalidationVersionExpected = 0
     }
 
+    // ============================================================
+    // Limpiar lock de adquirir turno (otro flujo podría correr luego).
+    conv.turnAcquiredLock = null
+
     // Solo si la versión actual coincide con la respondida, resetear última actividad.
     // Si entre que respondimos y el clear llegó otro mensaje (aunque sea raro por la 2ª validación),
     // conservar estado para no perderlo.
@@ -1102,6 +1192,7 @@ export const clearConversationAfterResponse = (phone, {
         finalVersion,
         currentVersion: conv.version,
         invalidationTimerCancelled: !(conv.metadata && conv.metadata.invalidationTimer),
+        turnLockCleared: true,
         action: 'conversation_cleared_after_response',
         file
     })
