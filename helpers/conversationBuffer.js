@@ -21,6 +21,19 @@ const SILENCE_WINDOW_MS = 45 * 1000
 const POLL_TICK_MS = 1000
 const MAX_WAIT_MS = 15 * 60 * 1000 // hard limit para no colgar polling para siempre
 
+// ============================================================
+// TIPOS DE MENSAJE SOPORTADOS (VÁLIDOS) PARA LA COORDINACIÓN.
+// CUALQUIER otro tipo (sticker, video, document, unknown, reaction, poll, etc.)
+// SERÁ COMPLETAMENTE IGNORADO:
+//   - NO incrementa version global
+//   - NO se agrega al buffer
+//   - NO causa invalidaciones ni flujos nuevos
+// Así evitamos el "limbo": versión nueva sin flow que la procese.
+// ============================================================
+const SUPPORTED_TYPES = new Set(['text', 'audio', 'image'])
+
+const isValidType = (type) => SUPPORTED_TYPES.has(String(type || '').toLowerCase())
+
 const conversations = new Map()
 
 const normalizeKey = (phone) => {
@@ -156,6 +169,25 @@ export const addReceivedMessage = (phone, {
     caption,
     file = 'conversationBuffer.js'
 } = {}) => {
+    // ============================================================
+    // BLOQUEO TIPOS NO SOPORTADOS (protección limbo / versión huérfana).
+    // Si el tipo NO es text/audio/image -> IGNORAR COMPLETAMENTE:
+    //   - no incrementa version
+    //   - no entra al buffer
+    //   - no causa invalidaciones
+    // ============================================================
+    const typeNorm = String(type || '').toLowerCase()
+    if (!isValidType(typeNorm)) {
+        defaultLogger.info('Tipo de mensaje NO SOPORTADO por coordinación: ignorado completamente', {
+            phone: phone ? String(phone) : '',
+            messageId: messageId ? String(messageId) : '',
+            type: typeNorm,
+            action: 'conversation_type_ignored_unsupported',
+            file
+        })
+        return null
+    }
+
     const conv = ensureConversation(phone)
     const id = String(messageId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
 
@@ -295,17 +327,24 @@ export const markMessageReady = (phone, messageId, {
 
 export const getConversationState = (phone) => {
     const conv = ensureConversation(phone)
+    const meaningfulMessages = conv.messages.filter(m => isValidType(m.type))
+    const anyPendingMeaningful = meaningfulMessages.some(m => m.status === 'pending')
     return {
         phoneKey: conv.key,
         version: conv.version,
         lastActivityAt: conv.lastActivityAt,
         bufferCount: conv.messages.length,
+        meaningfulCount: meaningfulMessages.length,
+        unsupportedCount: conv.messages.length - meaningfulMessages.length,
         bufferTypes: conv.messages.map(m => m.type),
-        allReady: conv.messages.length === 0 ? false : conv.messages.every(m => m.status === 'ready'),
+        // FIX LIMBO: allReady ya se calcula solo sobre tipos válidos (diagnóstico correcto)
+        allReady: meaningfulMessages.length === 0 ? false : !anyPendingMeaningful,
+        anyPendingMeaningful,
         messages: conv.messages.map(m => ({
             id: m.id, messageId: m.messageId, type: m.type,
             status: m.status, receivedAt: m.receivedAt, processedAt: m.processedAt,
-            version: m.version
+            version: m.version,
+            meaningful: isValidType(m.type)
         })),
         silenceElapsedMs: conv.lastActivityAt ? (Date.now() - conv.lastActivityAt) : 0
     }
@@ -318,7 +357,9 @@ export const getCurrentVersion = (phone) => {
 export const hasPendingMessages = (phone) => {
     const conv = ensureConversation(phone)
     if (conv.messages.length === 0) return false
-    return conv.messages.some(m => m.status === 'pending')
+    // FIX LIMBO: solo considera pendientes los tipos SOPORTADOS (text/audio/image).
+    // Un sticker pending no debe considerarse "mensaje pendiente que espera procesamiento".
+    return conv.messages.some(m => isValidType(m.type) && m.status === 'pending')
 }
 
 /**
@@ -330,6 +371,8 @@ export const hasPendingMessages = (phone) => {
 export const consumeLatestPendingOfType = (phone, type) => {
     const conv = ensureConversation(phone)
     const typeNorm = String(type || '').toLowerCase()
+    // FIX LIMBO: tipo no soportado retorna null inmediatamente.
+    if (!isValidType(typeNorm)) return null
     const pendings = conv.messages
         .filter(m => String(m.type).toLowerCase() === typeNorm && m.status === 'pending')
         .sort((a, b) => Number(b.receivedAt || 0) - Number(a.receivedAt || 0))
@@ -402,9 +445,22 @@ export const waitForTurn = async (phone, {
 
         const silenceElapsed = conv.lastActivityAt ? (now - conv.lastActivityAt) : 0
 
-        // ¿Hay algún mensaje pending todavía?
+        // ============================================================
+        // FIX LIMBO: SOLO considerar mensajes de TIPOS VÁLIDOS (text/audio/image)
+        // para las condiciones de "allReady" y "buffer no vacío".
+        //
+        // Si históricamente se colaron tipos no soportados (sticker, document, video, etc.)
+        // con status='pending' (o cualquier estado), LOS IGNORAMOS COMPLETAMENTE.
+        // De lo contrario, un único sticker pendiente bloquea TODO el ciclo para siempre
+        // (ya que no hay flow BuilderBot que lo marque ready) → limbo sin respuesta.
+        // ============================================================
+        const meaningfulMessages = conv.messages.filter(m => isValidType(m.type))
+        const anyPendingMeaningful = meaningfulMessages.some(m => m.status === 'pending')
+        const allReadyMeaningful = meaningfulMessages.length > 0 && !anyPendingMeaningful
+
+        // ¿Hay algún mensaje pending todavía? (legacy, solo para logs)
         const anyPending = conv.messages.some(m => m.status === 'pending')
-        const allReady = conv.messages.length > 0 && !anyPending
+        const allReady = allReadyMeaningful  // ← ESTE es el que usamos para adquirir turno
 
         // ¿Ventana de silencio completada?
         const silenceCompleted = silenceElapsed >= SILENCE_WINDOW_MS
@@ -420,8 +476,12 @@ export const waitForTurn = async (phone, {
                 flowVersion,
                 currentVersion: conv.version,
                 bufferCount: conv.messages.length,
+                meaningfulCount: meaningfulMessages.length,
+                unsupportedCount: conv.messages.length - meaningfulMessages.length,
                 allReady,
+                allReadyMeaningful,
                 anyPending,
+                anyPendingMeaningful,
                 silenceElapsedMs: silenceElapsed,
                 remainingSilenceMs: Math.max(0, SILENCE_WINDOW_MS - silenceElapsed),
                 action: 'conversation_polling_wait',
@@ -431,10 +491,10 @@ export const waitForTurn = async (phone, {
 
         // Condición de adquirir turno:
         //   - soy la versión vigente (check arriba)
-        //   - buffer no vacío
-        //   - todos ready
+        //   - meaningfulMessages no vacío (al menos 1 text/audio/image)
+        //   - todos los meaningful están ready
         //   - silenceCompleted
-        if (conv.messages.length > 0 && allReady && silenceCompleted) {
+        if (meaningfulMessages.length > 0 && allReadyMeaningful && silenceCompleted) {
             const combinedInput = buildCombinedInput(phone, { file })
             defaultLogger.info('Flujo ADQUIERE turno y construye contexto combinado', {
                 phoneKey,
@@ -444,7 +504,8 @@ export const waitForTurn = async (phone, {
                 flowVersion,
                 currentVersion: conv.version,
                 bufferCount: conv.messages.length,
-                bufferTypes: conv.messages.map(m => m.type),
+                meaningfulCount: meaningfulMessages.length,
+                bufferTypes: meaningfulMessages.map(m => m.type),
                 silenceElapsedMs: silenceElapsed,
                 combinedLength: String(combinedInput || '').length,
                 action: 'conversation_turn_acquired',
@@ -497,8 +558,16 @@ export const buildCombinedInput = (phone, { file = 'conversationBuffer.js' } = {
     const conv = ensureConversation(phone)
     if (conv.messages.length === 0) return ''
 
+    // ============================================================
+    // FIX LIMBO: SOLO incluir en el combined input TIPOS VÁLIDOS
+    // (text/audio/image). Ignorar sticker/document/video/unknown
+    // que se pudieron colar históricamente (no deben contaminar el prompt a la IA).
+    // ============================================================
+    const meaningfulMessages = conv.messages.filter(m => isValidType(m.type))
+    if (meaningfulMessages.length === 0) return ''
+
     const parts = []
-    for (const m of conv.messages) {
+    for (const m of meaningfulMessages) {
         let body = String(m.content || '').trim()
         if (m.type === 'image' && m.caption && String(m.caption).trim()) {
             if (!body) body = `(contenido de la imagen sin texto). Caption del usuario: "${String(m.caption).trim()}"`
@@ -508,11 +577,12 @@ export const buildCombinedInput = (phone, { file = 'conversationBuffer.js' } = {
     }
     const combined = parts.join('\n\n')
 
-    defaultLogger.info('Contexto combinado construido (SIN prefijos)', {
+    defaultLogger.info('Contexto combinado construido (SIN prefijos + solo tipos válidos)', {
         phoneKey: conv.key,
         phone,
         bufferCount: conv.messages.length,
-        bufferTypes: conv.messages.map(m => m.type),
+        meaningfulCount: meaningfulMessages.length,
+        bufferTypes: meaningfulMessages.map(m => m.type),
         combinedLength: combined.length,
         combinedPreview: combined.slice(0, 300),
         version: conv.version,
