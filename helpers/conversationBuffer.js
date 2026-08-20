@@ -22,29 +22,18 @@ const POLL_TICK_MS = 1000
 const MAX_WAIT_MS = 15 * 60 * 1000 // hard limit para no colgar polling para siempre
 
 // ============================================================
-// Ventana de ESTABILIZACIÓN por ráfagas de mensajes rápidos.
-// Fix: "envío 2/3/4 mensajes del mismo tipo seguidos y se invalida todo".
-//
-// Cuando el usuario envía mensajes MUY rápido (ej, 4 mensajes de texto seguidos
-// en menos de 1s), los listeners internos de BuilderBot (disparar addKeyword)
-// y NUESTRO listener (addReceivedFromRawMessage) compiten por orden.
-// Un flujo puede nacer con flowVersion desfasado por 1 ó 2 versiones
-// simplemente porque nuestro listener corrió 50ms después.
-//
-// Solución 2 capas:
-//   1) FLOW_VERSION_STABILIZATION_MS = 3000ms: mientras la última actividad
-//      del usuario sea hace <3s NO CEDER POR VERSIÓN DESFASADA.
-//      Dejamos que las versiones se "asienten" en la conversación.
-//      Pasados los 3s → sí ceder normalmente.
-//   2) MY_MESSAGE_ENTRY_WAIT_MS = 4000ms, polling 100ms: cada flow espera
-//      ACTIVAMENTE hasta que SU MENSAJE (el que le disparó) aparezca
-//      en el buffer (por messageId o por contenido match). Cuando lo
-//      encuentra, toma flowVersion = entry.version de ESE mensaje.
-//      Así sin importar el orden de listeners, nace con la correcta.
+// Ventana de ESTABILIZACIÓN por ráfagas (mixtas texto+audio+imagen).
+// Fix: "envío texto + audio rápido (<3s) y texto se invalida erróneamente".
+// Ahora la estabilización es 8s para cubrir ráfagas mixtas grandes.
+// Dentro de la VENTANA GLOBAL DE 45s de silencio, NUNCA se invalida por tipo.
 // ============================================================
-const FLOW_VERSION_STABILIZATION_MS = 3 * 1000
+const FLOW_VERSION_STABILIZATION_MS = 8 * 1000
 const MY_MESSAGE_ENTRY_TICK_MS = 100
 const MY_MESSAGE_ENTRY_WAIT_MS = 4 * 1000
+
+// Deadlock safety: turnLock mismo tipo se cancela si ganador no terminó en 10s
+// (protección si un flow se cuelga dentro de run() sin responder).
+const TURN_LOCK_SAME_TYPE_DEADLOCK_MS = 10 * 1000
 
 // ============================================================
 // TTL (Time To Live) para invalidaciones por desfase de versión
@@ -181,22 +170,33 @@ const ensureConversation = (phone) => {
             key,
             version: 0,
             lastActivityAt: 0,
-            messages: [], // { id, messageId, type, content, status: 'pending'|'ready', caption, receivedAt, processedAt, extra }
+            messages: [], // { id, messageId, type, content, status: 'pending'|'ready', caption, receivedAt, processedAt, extra, version }
             metadata: {
                 invalidatedAt: 0,
                 invalidationVersionExpected: 0,
                 invalidationTimer: null
             },
             cleanupTimer: null,
+            turnAcquiredLock: null,
             // ============================================================
-            // turnAcquiredLock: previene 2 calls run() duplicadas.
-            // Cuando un flujo (mismo tipo u otro) ADQUIERE el turno (allReady + 45s)
-            // se marca turnAcquiredLock = { flowId, flowType, flowVersion, at }.
-            // Cualquier otro flujo que intente adquirir después (incluso mismo tipo,
-            // antes de que se haga clearConversationAfterResponse) → NO adquiere y cede.
-            // Se limpia en clearConversationAfterResponse() o MAX_WAIT_MS timeout.
+            // firstFlowVersionByType: { text: 1, audio: 3, image: 4 }
+            // Guarda cuál fue la PRIMERA versión de cada tipo (el FLOW OWNER
+            // que tiene permitido ganar y combinar todos los mensajes de esa ráfaga).
+            // NUEVOS flows del MISMO TIPO (texto 2, texto 3) → NUNCA ganan,
+            //   ceden turn lock automáticamente al OWNER (texto 1) para que este
+            //   haga el combinedInput con TODO.
+            // NUEVOS flows de TIPO DIFERENTE (ej, imagen 4 llegó después de texto 1)
+            //   → si está DENTRO de 45s de la ráfaga, NO ceden, ambos siguen vivos
+            //     y el OWNER de tipo que coincida con el ÚLTIMO mensaje al vencer
+            //     silencio es el que responde (por la lógica de arriba del shouldCede).
             // ============================================================
-            turnAcquiredLock: null
+            firstFlowVersionByType: {},
+            // ============================================================
+            // aliveFlowsCount: contador de flows polling vivos en esta conversación
+            // Lo usamos en GREETINGS_RESET: si hay >0 aliveFlows → NO RESETEAR
+            // (probablemente se está procesando algo, no es huérfana).
+            // ============================================================
+            aliveFlowsCount: 0
         })
     }
     return conversations.get(key)
@@ -507,10 +507,12 @@ export const addReceivedMessage = (phone, {
 
     // ============================================================
     // Fix C: GREETINGS + ORPHAN RESET ANTES DE INSERTAR NUEVO MENSAJE
-    // Si la conversación está huérfana:
-    //   - tiene metadata.invalidatedAt (hubo una invalidación)
-    //   - O han pasado más de GREETINGS_ORPHAN_RESET_MS (2min) desde lastActivityAt
+    // Si la conversación está HUÉRFANA REAL (no hay flows vivos = nada procesando):
+    //   - tiene metadata.invalidatedAt + >= INVALIDATION_RESET_TTL_MS (30s)
+    //   - O han pasado > GREETINGS_ORPHAN_RESET_MS (2min) desde lastActivityAt
     //     Y el usuario ESCRIBE UN SALUDO (hola/buenos dias/que tal/etc.)
+    //   -> Y TAMBIÉN: conv.aliveFlowsCount === 0 (IMPORTANTE: no resetear si hay
+    //      2+ flows polling vivos en la ráfaga mixta texto+audio+imagen).
     // → Hacemos RESET COMPLETO ANTES de insertar este nuevo mensaje
     //   para que empiece desde cero sin desfase de versión.
     // ============================================================
@@ -519,7 +521,8 @@ export const addReceivedMessage = (phone, {
     const hasOldInvalidation = !!(conv.metadata && conv.metadata.invalidatedAt && (now - Number(conv.metadata.invalidatedAt)) >= INVALIDATION_RESET_TTL_MS)
     const hasOrphanExpired = (conv.messages.length > 0 && conv.lastActivityAt && (now - conv.lastActivityAt) >= GREETINGS_ORPHAN_RESET_MS)
     const isGreeting = isGreetingText(greetingsText)
-    const shouldResetBeforeInsert = (conv.version > 0 && conv.messages.length > 0 && (
+    const anyFlowsAlive = Number(conv.aliveFlowsCount || 0) > 0
+    const shouldResetBeforeInsert = !anyFlowsAlive && (conv.version > 0 && conv.messages.length > 0 && (
         hasOldInvalidation || (hasOrphanExpired && isGreeting)
     ))
 
@@ -536,6 +539,8 @@ export const addReceivedMessage = (phone, {
             hasOrphanExpired,
             isGreeting,
             greetingsText: greetingsText ? greetingsText.slice(0, 100) : '',
+            aliveFlowsCountNow: conv.aliveFlowsCount || 0,
+            anyFlowsAlive,
             versionBeforeReset: conv.version,
             messagesBeforeResetCount: conv.messages.length,
             lastActivityAt: conv.lastActivityAt ? new Date(conv.lastActivityAt).toISOString() : null,
@@ -545,9 +550,11 @@ export const addReceivedMessage = (phone, {
         })
         conv.metadata.invalidatedAt = 0
         conv.metadata.invalidationVersionExpected = 0
+        conv.firstFlowVersionByType = {}
         conv.messages = []
         conv.version = 0
         conv.lastActivityAt = 0
+        conv.aliveFlowsCount = 0
     }
 
     // ============================================================
@@ -797,85 +804,207 @@ export const waitForTurn = async (phone, {
 
     let lastLogAt = 0
 
+    // ============================================================
+    // REGISTRO: ESTE FLOW HA NACIDO (ALIVE)
+    // Incrementamos aliveFlowsCount para:
+    //   - GREETINGS_RESET NO borre conversación con flows vivos
+    //   - diagnostics en logs
+    // Lo decrementamos en TODO return (antes exit).
+    // ============================================================
+    conv.aliveFlowsCount = Number(conv.aliveFlowsCount || 0) + 1
+    const myFlowIndex = conv.aliveFlowsCount
+    const decrementAlive = () => {
+        try {
+            if (conv && (Number(conv.aliveFlowsCount || 0) > 0)) conv.aliveFlowsCount--
+        } catch (_) { /* no-op */ }
+    }
+
+    // ============================================================
+    // REGISTRO FIRST FLOW OWNER POR TIPO
+    // Si soy el PRIMERO flowType en firstFlowVersionByType → me guardo como OWNER.
+    // Ej: chatbot.js texto v1 nace → firstFlowVersionByType.text = 1 (OWNER)
+    //     chatbot.js texto v2 nace → existe firstFlowVersionByType.text → NO owner,
+    //        deberá ceder después de ventana estabilización (para que owner 1 responda todo).
+    // ============================================================
+    const flowTypeNorm = String(flowType || '').toLowerCase()
+    let imOwnerOfMyType = false
+    if (flowTypeNorm && SUPPORTED_TYPES.has(flowTypeNorm)) {
+        if (!conv.firstFlowVersionByType || !conv.firstFlowVersionByType[flowTypeNorm]) {
+            conv.firstFlowVersionByType = conv.firstFlowVersionByType || {}
+            conv.firstFlowVersionByType[flowTypeNorm] = Number(flowVersion || 0)
+            imOwnerOfMyType = true
+        } else {
+            imOwnerOfMyType = Number(conv.firstFlowVersionByType[flowTypeNorm] || 0) === Number(flowVersion || 0)
+        }
+    }
+
+    defaultLogger.debug('Flow registrado: aliveCount y ownerType guardados', {
+        phoneKey, phone,
+        flowType: flowTypeNorm, flowId, flowVersion,
+        imOwnerOfMyType,
+        ownerVersionForMyType: conv.firstFlowVersionByType[flowTypeNorm] || 0,
+        aliveFlowsCountNow: conv.aliveFlowsCount,
+        myFlowIndex,
+        action: 'conversation_flow_registered_alive',
+        file
+    })
+
     while (true) {
         const now = Date.now()
 
         // ============================================================
-        // NUEVA REGLA DE INVALIDACIÓN (POR TIPO DE MENSAJE, NO POR VERSIÓN):
-        //
-        //  🟢 MISMO TIPO que el ÚLTIMO mensaje (text→text, audio→audio, image→image):
-        //     NUNCA INVALIDAR, NUNCA CEDER, NUNCA PROGRAMAR TTL.
-        //     Esperar hasta 45s silencio y responder combinado.
-        //
-        //  🔴 TIPO DISTINTO que el ÚLTIMO mensaje (text→image, audio→text, etc):
-        //     SÍ INVALIDAR (ceder) + ORPHAN RESCUE si corresponde.
-        //
-        // La ventana de estabilización 3s sigue aplicando: si la última actividad
-        // es <3s y TIPO DISTINTO, esperamos a ver si el usuario sigue escribiendo
-        // (evitamos invalidar texto por una imagen que llegó 0.5s después y luego
-        //  otro texto 1s después → 3 cambios de tipo en 2s).
+        // 🔥 PRIMERO: check TURNO DUPLICADO (turnAcquiredLock).
+        // 🔴 IMPORTANTE: esto va ANTES de TODO: shouldCede, orphan rescue,
+        //    allReady. La razón: en ticks concurrentes (mismo 1s de polling),
+        //    si flow1 (texto último tipo) va por la vía "normal" y marca lock,
+        //    flow2 (audio) NO DEBE entrar por ORPHAN RESCUE duplicado.
         // ============================================================
-        const lastMeaningful = getLastMeaningfulMessage(conv)
-        const lastMeaningfulType = lastMeaningful ? String(lastMeaningful.type).toLowerCase() : null
-        const flowTypeNorm = String(flowType || '').toLowerCase()
-        const sinceLastActivity = conv.lastActivityAt ? (now - conv.lastActivityAt) : FLOW_VERSION_STABILIZATION_MS + 1
-        const inStabilizationWindow = sinceLastActivity < FLOW_VERSION_STABILIZATION_MS
+        if (conv.turnAcquiredLock) {
+            const lockOwner = conv.turnAcquiredLock
+            const isLockMe = lockOwner.flowId === flowId
+            const lockType = String(lockOwner.flowType || '').toLowerCase()
+            const lockAgeMs = lockOwner.at ? (now - Number(lockOwner.at || 0)) : 0
+            const sameTypeAsLock = lockType === flowTypeNorm
+            const deadlockBroken = sameTypeAsLock && lockAgeMs >= TURN_LOCK_SAME_TYPE_DEADLOCK_MS
 
-        let shouldCede = false
-        let cedeReason = null
-
-        if (lastMeaningfulType && flowTypeNorm && (flowTypeNorm !== lastMeaningfulType)) {
-            // TIPO DISTINTO al último mensaje significativo.
-            if (inStabilizationWindow) {
-                // pero <3s de la última actividad: NO CEDER TODAVÍA (ventana estabilización)
-                if (!lastLogAt || (now - lastLogAt) > 1000) {
+            if (!isLockMe && !deadlockBroken) {
+                // 🔥 Si otro flow ya tomó lock → cede inmediatamente, NO ORPHAN RESCUE.
+                if (!lastLogAt || (now - lastLogAt) > 5000) {
                     lastLogAt = now
-                    defaultLogger.debug('Flujo TIPO DISTINTO pero <3s de última actividad: no cede (ventana estabilización)', {
+                    defaultLogger.info('Flujo NO adquiere turno (lock previo): otro flujo ya adquirió', {
                         phoneKey, phone,
-                        flowType: flowTypeNorm,
-                        lastType: lastMeaningfulType,
-                        sinceLastActivityMs: sinceLastActivity,
-                        flowVersion, currentVersion: conv.version,
-                        action: 'conversation_invalidation_skipped_stabilization_window',
+                        flowType: flowTypeNorm, flowId, myFlowVersion: flowVersion,
+                        turnLockOwnerFlowId: lockOwner.flowId,
+                        turnLockOwnerType: lockType,
+                        turnLockOwnerVersion: lockOwner.flowVersion,
+                        turnLockAgeMs: lockAgeMs,
+                        sameTypeAsLock,
+                        deadlockBroken: false,
+                        checkedBeforeShouldCede: true,
+                        action: 'conversation_ceded_turn_already_acquired_early',
                         file
                     })
                 }
-                // skip cede → continue con abajo (acquire check)
-                shouldCede = false
-            } else {
-                shouldCede = true
-                cedeReason = 'different_type_from_last_message'
+                decrementAlive()
+                return {
+                    acquired: false,
+                    cancelReason: 'turn_already_acquired_other_flow',
+                    combinedInput: null,
+                    finalVersion: conv.version
+                }
             }
-        } else {
-            // MISMO TIPO o sin mensajes todavía → NO CEDER NUNCA.
-            // Incluso aunque flowVersion sea 1 y conv.version sea 5 (textos 2,3,4).
-            // El flujo TEXTO1 original sigue vivo para esperar los 45s y responder.
+            if (deadlockBroken) {
+                defaultLogger.warn('DEADLOCK BROKEN (early check): mismo tipo lock >= 10s old', {
+                    phoneKey, phone,
+                    flowType: flowTypeNorm, flowId,
+                    oldLockOwnerFlowId: lockOwner.flowId,
+                    oldLockAgeMs: lockAgeMs,
+                    oldLockVersion: lockOwner.flowVersion,
+                    action: 'conversation_turn_lock_deadlock_broken_same_type_early',
+                    file
+                })
+                conv.turnAcquiredLock = null
+            }
+        }
+
+        const lastMeaningful = getLastMeaningfulMessage(conv)
+        const lastMeaningfulType = lastMeaningful ? String(lastMeaningful.type).toLowerCase() : null
+        const sinceLastActivity = conv.lastActivityAt ? (now - conv.lastActivityAt) : 0
+        const inSilenceWindow45s = sinceLastActivity < SILENCE_WINDOW_MS
+        const inStabilizationWindow = sinceLastActivity < FLOW_VERSION_STABILIZATION_MS
+
+        // ============================================================
+        // NUEVA REGLA DE INVALIDACIÓN (DEFINITIVA):
+        //
+        // DENTRO DE LA VENTANA DE 45s DE SILENCIO (RÁFAGA ACTIVA):
+        //   🟢 NUNCA CEDER POR TIPO DISTINTO (texto 1, audio 2, imagen 3 dentro de 45s).
+        //      Todos los flows distintos siguen vivos esperando.
+        //   🟡 SOLO CEDEN flows NUEVOS de MISMO TIPO que NO son OWNER:
+        //      → texto 1 (owner) vs texto 2 (no owner) → texto 2 cede después de 8s estabilización.
+        //
+        // FUERA DE VENTANA (pasado 45s sin nueva actividad):
+        //   🟢 Si yo soy el tipo que coincide con el último mensaje significativo → NO ceder, ganar.
+        //   🔴 Si yo NO coincido con el último tipo (y no tiene sentido espere más) → ceder.
+        // ============================================================
+        let shouldCede = false
+        let cedeReason = null
+
+        if (inSilenceWindow45s) {
+            // ==================================================================
+            // DENTRO DE VENTANA 45s (RÁFAGA ACTIVA):
+            //   🔥 NUNCA CEDER POR NADA — EXPLÍCITO POR REGLAS DE NEGOCIO.
+            //
+            //   - TIPOS DISTINTOS (texto 1, audio 2, imagen 3 dentro de 45s):
+            //        TODOS siguen vivos esperando (por combinación mixed).
+            //   - MISMO TIPO non-owner (texto 1 owner + texto 2 non-owner):
+            //        NO ceder dentro de 45s (evita limbo por si el owner nunca
+            //        entró por race listener/timeout). Ambos esperan, y a los 45s
+            //        el que adquiera turno lock primero responde TODO, el otro
+            //        cede limpiamente por turnLock (mismo tipo deadlock 10s safety).
+            // ==================================================================
             shouldCede = false
+            cedeReason = null
+        } else {
+            // ==================================================================
+            // FUERA DE VENTANA 45s (RÁFAGA TERMINÓ):
+            //   Solo gana el flow cuyo tipo coincida con EL ÚLTIMO mensaje de la ráfaga.
+            //   Todos los demás tipos ceden (no tienen dueño del último mensaje).
+            // ==================================================================
+            if (lastMeaningfulType && flowTypeNorm && flowTypeNorm !== lastMeaningfulType) {
+                shouldCede = true
+                cedeReason = 'different_type_outside_45s_window_last_msg_type_different'
+            } else {
+                // Soy el tipo que coincide con el último mensaje, o solo 1 tipo: NO ceder.
+                shouldCede = false
+            }
+        }
+
+        // ============================================================
+        // LOG estabilización cada 1s si estoy en ventana.
+        // ============================================================
+        if (inStabilizationWindow && (!lastLogAt || (now - lastLogAt) > 1000)) {
+            lastLogAt = now
+            defaultLogger.debug('Flujo en ráfaga/estabilización < 8s: sigue vivo, no se invalida', {
+                phoneKey, phone,
+                flowType: flowTypeNorm, flowId, flowVersion,
+                imOwnerOfMyType,
+                ownerVersionForMyType: conv.firstFlowVersionByType?.[flowTypeNorm] || 0,
+                lastType: lastMeaningfulType,
+                sinceLastActivityMs: sinceLastActivity,
+                stabilizationMs: FLOW_VERSION_STABILIZATION_MS,
+                silenceWindowMs: SILENCE_WINDOW_MS,
+                insideSilenceWindow: inSilenceWindow45s,
+                aliveFlowsCountNow: conv.aliveFlowsCount,
+                shouldCedeNow: shouldCede,
+                cedeReason,
+                action: 'conversation_in_stabilization_window_same_mixed_types',
+                file
+            })
         }
 
         if (shouldCede) {
             // ============================================================
-            // ORPHAN RESCUE antes de ceder (igual que antes, pero ahora POR TIPO).
+            // ORPHAN RESCUE: antes de ceder, ¿está huérfana sin dueño respondiendo?
+            //   (allReady + 45s silencio)
             // ============================================================
             const meaningfulMessagesCurr = conv.messages.filter(m => isValidType(m.type))
             const anyPendingMeaningfulCurr = meaningfulMessagesCurr.some(m => m.status === 'pending')
             const allReadyMeaningfulCurr = meaningfulMessagesCurr.length > 0 && !anyPendingMeaningfulCurr
-            const silenceElapsedCurr = conv.lastActivityAt ? (now - conv.lastActivityAt) : 0
-            const silenceCompletedCurr = silenceElapsedCurr >= SILENCE_WINDOW_MS
-
+            const silenceCompletedCurr = sinceLastActivity >= SILENCE_WINDOW_MS
             if (meaningfulMessagesCurr.length > 0 && allReadyMeaningfulCurr && silenceCompletedCurr) {
+                // 🔥 MARCAR TURNO LOCK TAMBIÉN AQUÍ (antes de return)
+                // Para evitar que un 3er flow en mismo tick entre por ORPHAN RESCUE duplicado.
+                conv.turnAcquiredLock = { flowId, flowType: flowTypeNorm, flowVersion, at: now, orphan: true }
                 const combinedInput = buildCombinedInput(phone, { file })
-                defaultLogger.warn('ORPHAN RESCUE (por tipo): flujo tipo viejo rescata conversación huérfana y responde', {
+                defaultLogger.warn('ORPHAN RESCUE: flujo cedido rescata huérfana (lock marcado orphan)', {
                     phoneKey, phone,
-                    flowType: flowTypeNorm,
+                    flowType: flowTypeNorm, flowId, flowVersion,
+                    cedeReasonWouldBe: cedeReason,
                     lastType: lastMeaningfulType,
-                    flowId,
-                    flowVersion, currentVersion: conv.version,
                     bufferCount: conv.messages.length,
                     meaningfulCount: meaningfulMessagesCurr.length,
-                    bufferTypes: meaningfulMessagesCurr.map(m => m.type),
-                    silenceElapsedMs: silenceElapsedCurr,
-                    combinedLength: String(combinedInput || '').length,
+                    turnLockAcquired: true,
+                    orphanLock: true,
                     action: 'conversation_orphan_rescue_acquired',
                     file
                 })
@@ -884,90 +1013,77 @@ export const waitForTurn = async (phone, {
                     conv.metadata.invalidatedAt = 0
                     conv.metadata.invalidationVersionExpected = 0
                 }
+                decrementAlive()
                 return {
-                    acquired: true,
-                    cancelReason: null,
-                    combinedInput,
-                    finalVersion: conv.version,
-                    orphanRescue: true
+                    acquired: true, cancelReason: null,
+                    combinedInput, finalVersion: conv.version, orphanRescue: true
                 }
             }
 
             // ============================================================
-            // PROGRAMAR TTL 30s reset (si nadie vino en 30s → resetear).
+            // PROGRAMAR TTL 30s RESET SOLO EN CASO EXTREMO (fuera de 45s,
+            // no hay dueño claro y nadie responde).
+            // SIEMPRE que llega un mensaje nuevo después se CANCELA ESTE TIMER,
+            // así no borramos ráfagas válidas.
             // ============================================================
-            scheduleInvalidationReset(conv, phoneKey, phone, file)
+            if (!inSilenceWindow45s) {
+                scheduleInvalidationReset(conv, phoneKey, phone, file)
+            }
 
-            defaultLogger.info('Flujo invalidado CEDIDO por TIPO DISTINTO al último mensaje (nuevo tipo vigente)', {
-                phoneKey,
-                phone,
-                flowType: flowTypeNorm,
+            defaultLogger.info('Flujo CEDIDO (definitivo)', {
+                phoneKey, phone,
+                flowType: flowTypeNorm, flowId, flowVersion,
                 lastType: lastMeaningfulType,
-                flowId,
-                flowVersion,
-                currentVersion: conv.version,
-                bufferCount: conv.messages.length,
-                meaningfulCount: (conv.messages.filter(m => isValidType(m.type))).length,
-                cedeReason,
                 sinceLastActivityMs: sinceLastActivity,
-                invalidationTtlScheduled: Boolean(conv.metadata?.invalidationTimer),
-                invalidationExpectedVersion: conv.metadata?.invalidationVersionExpected || 0,
-                action: 'conversation_invalidated_different_type',
+                insideSilenceWindow45s: inSilenceWindow45s,
+                imOwnerOfMyType,
+                ownerVersionForMyType: conv.firstFlowVersionByType?.[flowTypeNorm] || 0,
+                aliveFlowsCountNow: conv.aliveFlowsCount,
+                cedeReason,
+                action: 'conversation_invalidated_ceded_definitive',
                 file
             })
+            decrementAlive()
             return {
-                acquired: false,
-                cancelReason: cedeReason || 'different_type_from_last_message',
-                combinedInput: null,
-                finalVersion: conv.version
+                acquired: false, cancelReason: cedeReason,
+                combinedInput: null, finalVersion: conv.version
             }
         }
 
-        const silenceElapsed = conv.lastActivityAt ? (now - conv.lastActivityAt) : 0
+        const silenceElapsed = sinceLastActivity
 
         // ============================================================
         // FIX LIMBO: SOLO considerar mensajes de TIPOS VÁLIDOS (text/audio/image)
         // para las condiciones de "allReady" y "buffer no vacío".
-        //
-        // Si históricamente se colaron tipos no soportados (sticker, document, video, etc.)
-        // con status='pending' (o cualquier estado), LOS IGNORAMOS COMPLETAMENTE.
-        // De lo contrario, un único sticker pendiente bloquea TODO el ciclo para siempre
-        // (ya que no hay flow BuilderBot que lo marque ready) → limbo sin respuesta.
         // ============================================================
         const meaningfulMessages = conv.messages.filter(m => isValidType(m.type))
         const anyPendingMeaningful = meaningfulMessages.some(m => m.status === 'pending')
         const allReadyMeaningful = meaningfulMessages.length > 0 && !anyPendingMeaningful
-
-        // ¿Hay algún mensaje pending todavía? (legacy, solo para logs)
         const anyPending = conv.messages.some(m => m.status === 'pending')
-        const allReady = allReadyMeaningful  // ← ESTE es el que usamos para adquirir turno
+        const allReady = allReadyMeaningful
+        const silenceCompleted = sinceLastActivity >= SILENCE_WINDOW_MS
 
-        // ¿Ventana de silencio completada?
-        const silenceCompleted = silenceElapsed >= SILENCE_WINDOW_MS
-
-        // Estado de polling para logs (cada ~5s)
+        // Cada ~5s log del polling.
         if (!lastLogAt || (now - lastLogAt) > 5000) {
             lastLogAt = now
             defaultLogger.debug('Flujo esperando turno (polling)', {
-                phoneKey,
-                phone,
-                flowType: flowTypeNorm,
-                lastType: lastMeaningfulType,
-                flowId,
-                flowVersion,
+                phoneKey, phone,
+                flowType: flowTypeNorm, lastType: lastMeaningfulType,
+                flowId, flowVersion,
                 currentVersion: conv.version,
+                imOwnerOfMyType,
+                ownerVersionForMyType: conv.firstFlowVersionByType?.[flowTypeNorm] || 0,
                 inStabilizationWindow,
                 sinceLastActivityMs: sinceLastActivity,
+                insideSilenceWindow45s: inSilenceWindow45s,
+                aliveFlowsCountNow: conv.aliveFlowsCount,
                 bufferCount: conv.messages.length,
                 meaningfulCount: meaningfulMessages.length,
                 unsupportedCount: conv.messages.length - meaningfulMessages.length,
-                allReady,
-                allReadyMeaningful,
-                anyPending,
-                anyPendingMeaningful,
+                allReady, allReadyMeaningful,
+                anyPending, anyPendingMeaningful,
                 silenceElapsedMs: silenceElapsed,
                 remainingSilenceMs: Math.max(0, SILENCE_WINDOW_MS - silenceElapsed),
-                // info turn lock
                 turnAcquiredByOther: Boolean(conv.turnAcquiredLock),
                 turnLockOwnerFlowId: conv.turnAcquiredLock?.flowId || null,
                 turnLockOwnerType: conv.turnAcquiredLock?.flowType || null,
@@ -976,66 +1092,35 @@ export const waitForTurn = async (phone, {
             })
         }
 
-        // ============================================================
-        // TURNO DUPLICADO PROTECCIÓN (turnAcquiredLock):
-        //   Si otro flujo (mismo tipo o distinto) YA ADQUIRIÓ el turno previamente
-        //   y está procesando IA / enviando / esperando clearConversation →
-        //   ESTE flujo cede inmediatamente para no duplicar respuesta.
-        // ============================================================
-        if (conv.turnAcquiredLock) {
-            defaultLogger.info('Flujo NO adquiere turno: otro flujo ya lo adquirió (turnAcquiredLock)', {
-                phoneKey, phone,
-                flowType: flowTypeNorm,
-                flowId,
-                myFlowVersion: flowVersion,
-                turnLockOwnerFlowId: conv.turnAcquiredLock?.flowId,
-                turnLockOwnerType: conv.turnAcquiredLock?.flowType,
-                turnLockOwnerVersion: conv.turnAcquiredLock?.flowVersion,
-                turnLockAt: conv.turnAcquiredLock?.at ? new Date(conv.turnAcquiredLock.at).toISOString() : null,
-                action: 'conversation_ceded_turn_already_acquired',
-                file
-            })
-            return {
-                acquired: false,
-                cancelReason: 'turn_already_acquired_other_flow',
-                combinedInput: null,
-                finalVersion: conv.version
-            }
-        }
-
         // Condición de adquirir turno:
-        //   - soy el tipo vigente (ya no hay shouldCede arriba)
-        //   - meaningfulMessages no vacío (al menos 1 text/audio/image)
-        //   - todos los meaningful están ready
+        //   - shouldCede = false (pasamos arriba)
+        //   - turnAcquiredLock está null (por el early check AL PRINCIPIO del while, nadie duplicó)
+        //   - meaningfulMessages no vacío
+        //   - todos meaningful están ready
         //   - silenceCompleted
         if (meaningfulMessages.length > 0 && allReadyMeaningful && silenceCompleted) {
-            // MARCAR LOCK antes de construir combined.
-            conv.turnAcquiredLock = {
-                flowId, flowType: flowTypeNorm, flowVersion, at: now
-            }
+            conv.turnAcquiredLock = { flowId, flowType: flowTypeNorm, flowVersion, at: now }
             const combinedInput = buildCombinedInput(phone, { file })
             defaultLogger.info('Flujo ADQUIERE turno y construye contexto combinado', {
-                phoneKey,
-                phone,
-                flowType: flowTypeNorm,
-                lastType: lastMeaningfulType,
-                flowId,
-                flowVersion,
-                currentVersion: conv.version,
+                phoneKey, phone,
+                flowType: flowTypeNorm, lastType: lastMeaningfulType,
+                flowId, flowVersion, currentVersion: conv.version,
+                imOwnerOfMyType,
+                ownerVersionForMyType: conv.firstFlowVersionByType?.[flowTypeNorm] || 0,
                 bufferCount: conv.messages.length,
                 meaningfulCount: meaningfulMessages.length,
                 bufferTypes: meaningfulMessages.map(m => m.type),
                 silenceElapsedMs: silenceElapsed,
                 combinedLength: String(combinedInput || '').length,
                 turnLockAcquired: true,
+                aliveFlowsCountNow: conv.aliveFlowsCount,
                 action: 'conversation_turn_acquired',
                 file
             })
+            decrementAlive()
             return {
-                acquired: true,
-                cancelReason: null,
-                combinedInput,
-                finalVersion: conv.version
+                acquired: true, cancelReason: null,
+                combinedInput, finalVersion: conv.version
             }
         }
 
@@ -1059,11 +1144,12 @@ export const waitForTurn = async (phone, {
                 currentVersion: conv.version,
                 waitedMs: now - startedAt,
                 maxWaitMs: MAX_WAIT_MS,
-                // info lock final
+                aliveFlowsCountNow: conv.aliveFlowsCount,
                 turnLockOwnerFlowId: conv.turnAcquiredLock?.flowId || null,
                 action: 'conversation_polling_timeout',
                 file
             })
+            decrementAlive()
             return {
                 acquired: false,
                 cancelReason: 'max_polling_timeout',
@@ -1182,30 +1268,68 @@ export const clearConversationAfterResponse = (phone, {
     // ============================================================
     let removedCount = 0
     let preservedCount = 0
-    let preservedVersions = []
+    let preservedVersionsBefore = []
+    let preservedLastActivityAt = 0
+    let preservedMaxVersion = 0
     if (finalVersion !== undefined && Number(conv.version) !== Number(finalVersion)) {
-        // Caso: HUBO MENSAJES NUEVOS DURANTE IA. Conservarlos.
-        const currentTotal = totalBeforeCount
-        conv.messages = conv.messages.filter(m => {
+        const rawPreserved = conv.messages.filter(m => {
             if (Number(m.version || 0) <= Number(finalVersion)) {
                 removedCount++
-                return false // eliminar
+                return false
             }
             preservedCount++
-            preservedVersions.push(Number(m.version || 0))
-            return true // conservar
+            preservedVersionsBefore.push(Number(m.version || 0))
+            preservedMaxVersion = Math.max(preservedMaxVersion, Number(m.version || 0))
+            preservedLastActivityAt = Math.max(preservedLastActivityAt, Number(m.receivedAt || 0))
+            return true
         })
+
+        // ============================================================
+        // 🔥 IMPORTANTE: "NUEVO FLUJO" para los mensajes preservados.
+        // Tal como pidió el usuario: estos mensajes NO dependen del
+        // flujo anterior, son completamente INDEPENDIENTES.
+        //
+        // Para eso renumeramos sus versiones EMPEZANDO EN 1,2,3...
+        // (como si fuera una conversación nueva), y reseteamos
+        // conv.version al nuevo total, lastActivityAt al último
+        // receivedAt preservado, y vaciamos firstFlowVersionByType
+        // para que los nuevos flows que BuilderBot dispare se
+        // registren como OWNERs correctamente (sin map viejo).
+        // ============================================================
+        if (preservedCount > 0) {
+            rawPreserved.sort((a,b) => Number(a.receivedAt || 0) - Number(b.receivedAt || 0))
+            const renumeratedPreserved = rawPreserved.map((entry, idxZeroBased) => ({
+                ...entry,
+                version: idxZeroBased + 1   // viejas versiones 3,4,5 → nuevas 1,2,3 (nuevo flujo!)
+            }))
+            conv.messages = renumeratedPreserved
+            conv.version = preservedCount                // nuevo global version = # mensajes preservados.
+            conv.lastActivityAt = preservedLastActivityAt  // lastActivity = último msg preservado.
+        } else {
+            conv.messages = rawPreserved // preservedCount=0, lista vacía.
+        }
+
+        // NUEVO FLUJO: limpiamos el mapa de owners (para que los flows de
+        // BuilderBot que disparen los mensajes preservados sean los primeros).
+        conv.firstFlowVersionByType = {}
+
+        const preservedVersionsAfter = preservedCount > 0
+            ? conv.messages.map(m => Number(m.version || 0))
+            : []
+
         defaultLogger.info('Clear post-respuesta: hubo mensajes nuevos durante IA → CONSERVADOS (flujo nuevo independiente)', {
             phoneKey: conv.key,
             phone,
             totalBeforeCount,
             removedOlderVersions: removedCount,
             preservedNewerCount: preservedCount,
-            preservedVersions: preservedCount < 20 ? preservedVersions : `${preservedCount} items (omit list)`,
+            preservedVersionsBefore: preservedCount < 20 ? preservedVersionsBefore : `${preservedCount} items (omit list)`,
+            preservedVersionsAfterRenumber: preservedCount < 20 ? preservedVersionsAfter : `${preservedCount} items (omit list)`,
             finalVersionResponded: Number(finalVersion),
-            currentVersionStill: Number(conv.version),
-            lastActivityStill: conv.lastActivityAt ? new Date(conv.lastActivityAt).toISOString() : null,
-            note: 'LOS MENSAJES CONSERVADOS SERÁN PROCESADOS EN UN FLUJO NUEVO DE BUILDERBOT',
+            newVersionGlobalNow: Number(conv.version),
+            newLastActivityAtNow: preservedLastActivityAt ? new Date(preservedLastActivityAt).toISOString() : null,
+            firstFlowOwnersReset: true,
+            note: '🔥 RENUMERADAS VERSIONES A 1,2,3 NUEVO FLUJO BUILDERBOT INDEPENDIENTE. LAST ACTIVITY ACTUALIZADA.',
             action: 'conversation_cleared_preserved_new_messages',
             file
         })
@@ -1230,12 +1354,14 @@ export const clearConversationAfterResponse = (phone, {
     conv.turnAcquiredLock = null
 
     // Resetear version/lastActivityAt SÓLO cuando NO se conservaron mensajes nuevos
-    // (es decir, cuando respondimos la versión actual con exactamente la misma).
-    // Si conservamos mensajes nuevos, NO reseteamos (de lo contrario la versión
-    // de esos mensajes nuevos quedaría huérfana con un version=0 global y todo).
-    if (finalVersion !== undefined && Number(conv.version) === Number(finalVersion)) {
+    // (preservedCount === 0, respondimos exactamente el último msg).
+    // Si preservedCount > 0: los mensajes ya fueron renumerados a 1,2,3 (nuevo flujo)
+    //        y lastActivityAt ya fue actualizado al último receivedAt preservado.
+    if (preservedCount === 0) {
         conv.lastActivityAt = 0
         conv.version = 0
+        conv.firstFlowVersionByType = {}
+        if (Number(conv.aliveFlowsCount || 0) <= 0) conv.aliveFlowsCount = 0
     }
     defaultLogger.info('Buffer de conversación limpio (respuesta enviada OK)', {
         phoneKey: conv.key,
@@ -1245,10 +1371,12 @@ export const clearConversationAfterResponse = (phone, {
         preservedCount,
         finalVersion,
         currentVersion: conv.version,
+        firstFlowOwnersReset: (preservedCount === 0) || (conv.firstFlowVersionByType && Object.keys(conv.firstFlowVersionByType).length === 0),
+        aliveFlowsCountNow: conv.aliveFlowsCount || 0,
         invalidationTimerCancelled: !(conv.metadata && conv.metadata.invalidationTimer),
         turnLockCleared: true,
         preservedNewerMessagesExist: preservedCount > 0,
-        note: preservedCount > 0 ? 'NUEVO FLUJO BuilderBot disparará para mensajes conservados' : null,
+        note: preservedCount > 0 ? 'NUEVO FLUJO BuilderBot disparará para mensajes conservados (version 1..N, lastActivity actualizado)' : null,
         action: 'conversation_cleared_after_response',
         file
     })
