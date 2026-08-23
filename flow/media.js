@@ -23,7 +23,8 @@ import {
     getConversationState,
     getCurrentVersion,
     consumeLatestPendingOfType,
-    waitForMyMessageEntryInBuffer
+    waitForMyMessageEntryInBuffer,
+    isImageMessageThrottled
 } from '../helpers/conversationBuffer.js';
 
 
@@ -162,8 +163,26 @@ export const media = addKeyword(EVENTS.MEDIA)
         const numberPhone = extractNumber(ctx)
         const name = ctx?.pushName ?? ''
         const mediaCaption = extractMediaCaption(ctx)
+        const messageId = ctx?.key?.id || null
 
         try {
+            // ================ THROTTLING TEMPRANO DE IMÁGENES ================
+            // Si esta imagen específica fue rechazada por throttling (< 20s desde
+            // la última aceptada), salir inmediatamente sin setup, sin logs pesados,
+            // sin esperar polling ni nada.
+            const throttleCheck = isImageMessageThrottled(numberPhone, messageId, { file: 'media.js' })
+            if (throttleCheck.throttled) {
+                defaultLogger.info('Flujo imagen terminado inmediatamente: throttled (20s)', {
+                    userId, numberPhone, name, messageId,
+                    waitRemainingMs: throttleCheck.waitMs,
+                    mediaCaption: String(mediaCaption || '').slice(0, 100),
+                    action: 'media_flow_end_throttled_early',
+                    file: 'media.js'
+                })
+                return endFlow()
+            }
+            // ==================================================================
+
             const { profilePictureUrl } = await getProfilePictureInfo(ctx, provider, {
                 userId, numberPhone, name, file: 'media.js'
             })

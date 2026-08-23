@@ -61,6 +61,14 @@ const GREETINGS_ORPHAN_RESET_MS = 2 * 60 * 1000
 const GREETINGS_KEYWORDS = ['hola', 'buenos dias', 'buenas tardes', 'buenas noches', 'que tal', 'alo', 'buen dia', 'holi', 'holaa', 'hey', 'hi', 'hello']
 
 // ============================================================
+// THROTTLING DE IMÁGENES (anti-saturación):
+// Sólo se acepta 1 imagen por usuario cada IMAGE_THROTTLE_MS (20s).
+// Cualquier imagen adicional dentro de esa ventana se ignora
+// completamente (no entra al buffer, no incrementa versión).
+// ============================================================
+const IMAGE_THROTTLE_MS = 20 * 1000
+
+// ============================================================
 // TIPOS DE MENSAJE SOPORTADOS (VÁLIDOS) PARA LA COORDINACIÓN.
 // CUALQUIER otro tipo (sticker, video, document, unknown, reaction, poll, etc.)
 // SERÁ COMPLETAMENTE IGNORADO:
@@ -196,7 +204,18 @@ const ensureConversation = (phone) => {
             // Lo usamos en GREETINGS_RESET: si hay >0 aliveFlows → NO RESETEAR
             // (probablemente se está procesando algo, no es huérfana).
             // ============================================================
-            aliveFlowsCount: 0
+            aliveFlowsCount: 0,
+            // ============================================================
+            // lastImageAcceptedAt: timestamp de la ÚLTIMA imagen ACEPTADA
+            // (no rechazada por throttle). Usado por IMAGE_THROTTLE_MS.
+            // ============================================================
+            lastImageAcceptedAt: 0,
+            // ============================================================
+            // throttledImageMessageIds: lista de messageIds de imágenes
+            // que fueron RECHAZADAS por throttling (con TTL de 30s).
+            // media.js consulta esto al inicio para salir sin esperar.
+            // ============================================================
+            throttledImageMessageIds: [] // [{ id, expiresAt }]
         })
     }
     return conversations.get(key)
@@ -502,6 +521,29 @@ export const addReceivedMessage = (phone, {
         return null
     }
 
+    // ============================================================
+    // THROTTLING DE IMÁGENES: antes de insertar, chequear ventana.
+    // Si está dentro de 20s desde la última imagen aceptada →
+    // → ignorar completamente (no incrementa version, no entra).
+    // ============================================================
+    if (typeNorm === 'image') {
+        const throttleResult = checkAndSetImageThrottle(phone, {
+            file,
+            setOnAllow: true,
+            messageId: messageId || null,
+            extraLog: {
+                stage: 'addReceivedMessage_pre_insert',
+                caption: String(caption || '').slice(0, 80),
+                contentPreview: String(content || '').slice(0, 80)
+            }
+        })
+        if (!throttleResult.allowed) {
+            // Retornar null: igual que los tipos no soportados.
+            // NO incrementa version, NO entra al buffer, NO hace nada.
+            return null
+        }
+    }
+
     const conv = ensureConversation(phone)
     const id = String(messageId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
 
@@ -704,6 +746,159 @@ export const markMessageReady = (phone, messageId, {
     })
 
     return conv.messages[idx]
+}
+
+// ============================================================
+// THROTTLING DE IMÁGENES — helper público.
+// ============================================================
+// Retorna { allowed: boolean, waitMs: number, lastAcceptedAt: number, now: number }
+//   - allowed=true  → se acepta la imagen y se actualiza lastImageAcceptedAt.
+//   - allowed=false → dentro de ventana de throttle, omitir.
+//
+// Uso:
+//   media.js: al inicio del addAction, si !allowed → return endFlow()
+//   addReceivedMessage: si tipo=image y !allowed → return null (ignorado)
+// ============================================================
+export const checkAndSetImageThrottle = (phone, {
+    file = 'conversationBuffer.js',
+    setOnAllow = true,
+    messageId = null,
+    extraLog = {}
+} = {}) => {
+    const conv = ensureConversation(phone)
+    const phoneKey = normalizeKey(phone)
+    const now = Date.now()
+    const lastAcceptedAt = Number(conv.lastImageAcceptedAt || 0)
+    const elapsedMs = lastAcceptedAt > 0 ? (now - lastAcceptedAt) : (IMAGE_THROTTLE_MS + 1)
+    const waitMs = lastAcceptedAt > 0 ? Math.max(0, IMAGE_THROTTLE_MS - elapsedMs) : 0
+
+    // Limpiar entries expiradas de throttledImageMessageIds
+    if (Array.isArray(conv.throttledImageMessageIds) && conv.throttledImageMessageIds.length > 0) {
+        const beforeCount = conv.throttledImageMessageIds.length
+        conv.throttledImageMessageIds = conv.throttledImageMessageIds.filter(e =>
+            e && e.id && Number(e.expiresAt || 0) > now
+        )
+        if (beforeCount !== conv.throttledImageMessageIds.length) {
+            defaultLogger.debug('Limpieza TTL: throttledImageMessageIds reducido', {
+                phoneKey, phone,
+                beforeCount, afterCount: conv.throttledImageMessageIds.length,
+                action: 'image_throttle_cleanup_expired',
+                file
+            })
+        }
+    }
+
+    if (lastAcceptedAt > 0 && elapsedMs < IMAGE_THROTTLE_MS) {
+        // Registrar messageId en lista de throttled (para consulta rápida desde media.js)
+        if (messageId && String(messageId).trim()) {
+            const id = String(messageId).trim()
+            if (!conv.throttledImageMessageIds.find(e => e && e.id === id)) {
+                conv.throttledImageMessageIds.push({
+                    id,
+                    expiresAt: now + Math.max(IMAGE_THROTTLE_MS, 30 * 1000)
+                })
+                defaultLogger.debug('Image messageId registrada como throttled', {
+                    phoneKey, phone,
+                    messageId: id,
+                    expiresAt: new Date(now + Math.max(IMAGE_THROTTLE_MS, 30 * 1000)).toISOString(),
+                    action: 'image_throttle_id_registered',
+                    file
+                })
+            }
+        }
+        defaultLogger.info('Image throttle BLOQUEADO: dentro de ventana de 20s desde última imagen aceptada', {
+            phoneKey, phone,
+            messageId: messageId ? String(messageId).trim() : null,
+            lastImageAcceptedAt: lastAcceptedAt ? new Date(lastAcceptedAt).toISOString() : null,
+            elapsedSinceLastAcceptedMs: elapsedMs,
+            waitRemainingMs: waitMs,
+            throttleWindowMs: IMAGE_THROTTLE_MS,
+            action: 'image_throttle_blocked',
+            file,
+            ...(extraLog && typeof extraLog === 'object' ? extraLog : {})
+        })
+        return { allowed: false, waitMs, lastAcceptedAt, now }
+    }
+
+    if (setOnAllow) {
+        conv.lastImageAcceptedAt = now
+    }
+    defaultLogger.info('Image throttle PERMITIDO: aceptando imagen', {
+        phoneKey, phone,
+        messageId: messageId ? String(messageId).trim() : null,
+        previousLastAcceptedAt: lastAcceptedAt ? new Date(lastAcceptedAt).toISOString() : null,
+        elapsedSinceLastAcceptedMs: elapsedMs,
+        throttleWindowMs: IMAGE_THROTTLE_MS,
+        nowAcceptedAt: new Date(now).toISOString(),
+        action: 'image_throttle_allowed',
+        file,
+        ...(extraLog && typeof extraLog === 'object' ? extraLog : {})
+    })
+    return { allowed: true, waitMs: 0, lastAcceptedAt, now }
+}
+
+// ============================================================
+// Helper para media.js: detecta rápidamente si un messageId
+// específico fue rechazado por throttling de imágenes.
+// Retorna { throttled: boolean, waitMs: number }
+// ============================================================
+export const isImageMessageThrottled = (phone, messageId, {
+    file = 'conversationBuffer.js'
+} = {}) => {
+    const conv = ensureConversation(phone)
+    const phoneKey = normalizeKey(phone)
+    const now = Date.now()
+    const targetId = messageId ? String(messageId).trim() : ''
+
+    // Limpiar entries expiradas
+    if (Array.isArray(conv.throttledImageMessageIds) && conv.throttledImageMessageIds.length > 0) {
+        conv.throttledImageMessageIds = conv.throttledImageMessageIds.filter(e =>
+            e && e.id && Number(e.expiresAt || 0) > now
+        )
+    }
+
+    if (targetId && Array.isArray(conv.throttledImageMessageIds)) {
+        const found = conv.throttledImageMessageIds.find(e => e.id === targetId)
+        if (found) {
+            const remaining = Math.max(0, Number(found.expiresAt || 0) - now)
+            defaultLogger.info('isImageMessageThrottled: messageId encontrado en lista de throttled', {
+                phoneKey, phone,
+                messageId: targetId,
+                remainingMs: remaining,
+                action: 'image_throttle_id_check_hit',
+                file
+            })
+            return { throttled: true, waitMs: remaining }
+        }
+    }
+
+    // Fallback: si no está en la lista, chequear la ventana global
+    const lastAcceptedAt = Number(conv.lastImageAcceptedAt || 0)
+    if (lastAcceptedAt > 0) {
+        const elapsed = now - lastAcceptedAt
+        if (elapsed < IMAGE_THROTTLE_MS) {
+            const remaining = Math.max(0, IMAGE_THROTTLE_MS - elapsed)
+            defaultLogger.info('isImageMessageThrottled: dentro de ventana global throttle (fallback)', {
+                phoneKey, phone,
+                messageId: targetId,
+                lastImageAcceptedAt: new Date(lastAcceptedAt).toISOString(),
+                elapsedSinceLastAcceptedMs: elapsed,
+                remainingMs: remaining,
+                action: 'image_throttle_global_check_hit',
+                file
+            })
+            return { throttled: true, waitMs: remaining }
+        }
+    }
+
+    defaultLogger.debug('isImageMessageThrottled: NO throttled', {
+        phoneKey, phone,
+        messageId: targetId,
+        lastImageAcceptedAt: lastAcceptedAt ? new Date(lastAcceptedAt).toISOString() : null,
+        action: 'image_throttle_check_miss',
+        file
+    })
+    return { throttled: false, waitMs: 0 }
 }
 
 // ============================================================
