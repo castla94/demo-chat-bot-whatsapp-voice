@@ -28,7 +28,7 @@ import {
 } from '../helpers/conversationBuffer.js'
 
 // Constantes de configuración
-let TIMEOUT_MS = 45000 // Tiempo de espera aleatorio entre 45-60 segundos
+let TIMEOUT_MS = 5000 // Tiempo de espera para consolidación: 5 segundos
 
 // Almacenamiento en memoria para gestionar mensajes de usuarios
 const userBuffers = {} // Buffer de mensajes por usuario
@@ -241,8 +241,9 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, ctx.body, "user")
             if (shouldEndFlow) return endFlow()
 
-            // TIMEOUT_MS random entre 30-45s (solo para legacy fallback cuando conversationVersion <= 0)
-            TIMEOUT_MS = Math.floor(Math.random() * (60000 - 45000 + 1) + 45000)
+            // TIMEOUT_MS para legacy fallback cuando conversationVersion <= 0
+            // Fijo en 5s para respuesta inmediata (sin random)
+            TIMEOUT_MS = 5000
 
             // ===== HISTORIAL =====
             const historyGlobalStatus = state.getMyState()?.history ?? []
