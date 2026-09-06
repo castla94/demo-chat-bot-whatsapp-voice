@@ -35,6 +35,56 @@ import {
  */
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
+// ============================================================
+// KEEP-ALIVE DE PRESENCIA ("escribiendo…")
+// ============================================================
+// WhatsApp Baileys borra el estado "composing" tras ~15s de inactividad.
+// Refrescamos cada PRESENCE_REFRESH_MS hasta stop().
+// ============================================================
+const PRESENCE_REFRESH_MS = 10 * 1000
+const startPresenceKeepAlive = (provider, jid, { presenceType = 'composing', file = 'media.js' } = {}) => {
+    let stopped = false
+    let refreshTimer = null
+    const fireAndForgetSend = () => {
+        if (stopped || !provider || !provider?.vendor?.sendPresenceUpdate || !jid) return
+        ;(async () => {
+            try {
+                await provider.vendor.sendPresenceUpdate(presenceType, jid)
+                defaultLogger.debug('Presence keep-alive reenviado (media flow)', {
+                    jid, presenceType,
+                    action: 'presence_keepalive_refresh',
+                    file
+                })
+            } catch (e) {
+                defaultLogger.debug('Presence keep-alive error silencioso (media flow)', {
+                    jid, presenceType,
+                    error: e?.message || String(e),
+                    action: 'presence_keepalive_error_swallowed',
+                    file
+                })
+            }
+        })()
+    }
+    fireAndForgetSend()
+    refreshTimer = setInterval(fireAndForgetSend, PRESENCE_REFRESH_MS)
+    const stop = async () => {
+        if (stopped) return
+        stopped = true
+        if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+        try {
+            if (provider?.vendor?.sendPresenceUpdate && jid) {
+                await provider.vendor.sendPresenceUpdate('paused', jid)
+                defaultLogger.debug('Presence keep-alive detenido → paused (media flow)', {
+                    jid, presenceType,
+                    action: 'presence_keepalive_stopped',
+                    file
+                })
+            }
+        } catch (_) {}
+    }
+    return { stop }
+}
+
 
 // Function to check premium plan status
 const checkPremiumPlan = async (userId, numberPhone, name, provider) => {
@@ -323,8 +373,32 @@ export const media = addKeyword(EVENTS.MEDIA)
                 file: 'media.js'
             })
 
-            // 1. Enviar estado "escribiendo" (después de setup, igual que chatbot/voice)
-            await provider.vendor.sendPresenceUpdate('composing', ctx.key.remoteJid)
+            // ===== KEEP-ALIVE PRESENCIA "escribiendo…" =====
+            // Mantener estado durante: análisis de imagen + polling 25s + IA + respuesta.
+            // WhatsApp borra composing tras ~15s → refrescamos cada 10s.
+            // 🔥 INICIAMOS AQUÍ (después del throttle, guardado y setup) para no
+            //    activar loops en imágenes rechazadas por throttling.
+            const presence = startPresenceKeepAlive(provider, ctx.key.remoteJid, {
+                presenceType: 'composing', file: 'media.js'
+            })
+            const stopPresenceSafe = async () => {
+                try { await new Promise(resolve => setTimeout(resolve, 5000)) } catch (_) {}
+                try { await presence.stop() } catch (_) {}
+            }
+            // Helper: limpiar archivo temporal + stop presence (para paths tempranos que borran img)
+            const cleanupImageAndPresence = async (imgPath) => {
+                if (imgPath) {
+                    try {
+                        fs.unlink(imgPath, (error) => {
+                            if (error) defaultLogger.error('Error eliminando Imagen', {
+                                userId, numberPhone, name, error: error.message,
+                                action: 'delete_image', file: 'media.js'
+                            })
+                        })
+                    } catch (_) {}
+                }
+                await stopPresenceSafe()
+            }
 
             defaultLogger.info('Iniciando etapa de análisis y respuesta (imagen - único addAction)', {
                 userId, numberPhone, name, mediaCaption,
@@ -340,9 +414,7 @@ export const media = addKeyword(EVENTS.MEDIA)
                     action: 'image_process_empty',
                     file: 'media.js'
                 })
-                fs.unlink(pathImg, (error) => {
-                    if (error) defaultLogger.error('Error eliminando Imagen', { userId, numberPhone, name, error: error.message, action: 'delete_image', file: 'media.js' });
-                });
+                await cleanupImageAndPresence(pathImg)
                 return endFlow()
             }
             defaultLogger.info('Respuesta del modelo obtenida Imagen', {
@@ -395,9 +467,7 @@ export const media = addKeyword(EVENTS.MEDIA)
             // ===== ALARMA USER SIDE (igual que chatbot/voice) =====
             const shouldEndFlowUser = await processAlarm(ctx, numberPhone, name, provider, imageProcessedContent, "user")
             if (shouldEndFlowUser) {
-                fs.unlink(pathImg, (error) => {
-                    if (error) defaultLogger.error('Error eliminando Imagen', { userId, numberPhone, name, error: error.message, action: 'delete_image', file: 'media.js' });
-                });
+                await cleanupImageAndPresence(pathImg)
                 return endFlow()
             }
 
@@ -419,6 +489,7 @@ export const media = addKeyword(EVENTS.MEDIA)
                     image: responseImage,
                     name, numberPhone, userId, ctx, provider, flowDynamic, state, pathImg
                 })
+                await stopPresenceSafe()
                 return endFlow()
             }
 
@@ -438,9 +509,7 @@ export const media = addKeyword(EVENTS.MEDIA)
                     action: 'conversation_image_cede',
                     file: 'media.js'
                 })
-                fs.unlink(pathImg, (error) => {
-                    if (error) defaultLogger.error('Error eliminando Imagen', { userId, numberPhone, name, error: error.message, action: 'delete_image', file: 'media.js' });
-                });
+                await cleanupImageAndPresence(pathImg)
                 return endFlow()
             }
 
@@ -485,6 +554,7 @@ export const media = addKeyword(EVENTS.MEDIA)
                 flowVersion,
                 pathImg
             })
+            await stopPresenceSafe()
             return endFlow()
 
         } catch (error) {
@@ -498,9 +568,12 @@ export const media = addKeyword(EVENTS.MEDIA)
             return endFlow()
         } finally {
             try {
-                // ✅ SÓLO presence paused + sleep (quitamos readMessages de aquí para no marcar sin responder)
-                await new Promise(resolve => setTimeout(resolve, 5000));
-                await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
+                // Parada defensiva (siempre paused). Los paths exitosos ya llamaron
+                // a stopPresenceSafe (con 5s grace + interval clear). Aquí sin sleep
+                // para no bloquear el finally de BuilderBot.
+                if (provider?.vendor?.sendPresenceUpdate && ctx?.key?.remoteJid) {
+                    try { await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid) } catch (_) {}
+                }
             } catch (_) { /* no-op */ }
         }
     })

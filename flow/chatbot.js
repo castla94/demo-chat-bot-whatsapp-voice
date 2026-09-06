@@ -41,6 +41,61 @@ const userTimeouts = {} // Timeouts por usuario
  */
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms))
 
+// ============================================================
+// KEEP-ALIVE DE PRESENCIA ("escribiendo…")
+// ============================================================
+// WhatsApp Baileys borra el estado "composing" tras ~15s de inactividad.
+// Mantenerlo refrescándolo cada PRESENCE_REFRESH_MS hasta que se llame a stop().
+// - presenceType: 'composing' (texto/imagen) o 'recording' (audio)
+// - Devuelve { stop(): Promise<void> } para finalizar
+// ============================================================
+const PRESENCE_REFRESH_MS = 10 * 1000 // 10s
+const startPresenceKeepAlive = (provider, jid, { presenceType = 'composing', file = 'chatbot.js' } = {}) => {
+    let stopped = false
+    let refreshTimer = null
+
+    const fireAndForgetSend = () => {
+        if (stopped || !provider || !provider?.vendor?.sendPresenceUpdate || !jid) return
+        ;(async () => {
+            try {
+                await provider.vendor.sendPresenceUpdate(presenceType, jid)
+                defaultLogger.debug('Presence keep-alive reenviado', {
+                    jid, presenceType,
+                    action: 'presence_keepalive_refresh',
+                    file
+                })
+            } catch (e) {
+                defaultLogger.debug('Presence keep-alive error silencioso (no fatal)', {
+                    jid, presenceType,
+                    error: e?.message || String(e),
+                    action: 'presence_keepalive_error_swallowed',
+                    file
+                })
+            }
+        })()
+    }
+
+    fireAndForgetSend()
+    refreshTimer = setInterval(fireAndForgetSend, PRESENCE_REFRESH_MS)
+
+    const stop = async () => {
+        if (stopped) return
+        stopped = true
+        if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+        try {
+            if (provider?.vendor?.sendPresenceUpdate && jid) {
+                await provider.vendor.sendPresenceUpdate('paused', jid)
+                defaultLogger.debug('Presence keep-alive detenido → paused', {
+                    jid, presenceType,
+                    action: 'presence_keepalive_stopped',
+                    file
+                })
+            }
+        } catch (_) { /* no-op */ }
+    }
+    return { stop }
+}
+
 
 function extractNumber(ctx) {
     try {
@@ -263,8 +318,20 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 await state.update({ history: historyDB })
             }
 
-            // 1. Enviar estado "escribiendo"
-            await provider.vendor.sendPresenceUpdate('composing', ctx.key.remoteJid)
+            // ===== KEEP-ALIVE PRESENCIA "escribiendo…" =====
+            // WhatsApp borra composing tras ~15s. Refrescamos cada 10s
+            // hasta que termine el flujo (polling + IA + respuesta).
+            const presence = startPresenceKeepAlive(provider, ctx.key.remoteJid, {
+                presenceType: 'composing', file: 'chatbot.js'
+            })
+            const stopPresenceSafe = async () => {
+                try {
+                    // Esperar ~5s para que el mensaje de respuesta se muestre
+                    // después del estado "escribiendo" (mejor UX).
+                    await new Promise(resolve => setTimeout(resolve, 5000))
+                } catch (_) {}
+                try { await presence.stop() } catch (_) {}
+            }
 
             // =================== PROCESAR RESPUESTA (antes "segunda acción") ===================
             defaultLogger.info('Iniciando etapa de respuesta (texto - único addAction)', {
@@ -289,7 +356,12 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                     // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de IA, antes de enviar respuesta)
                     try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
                     await respondAndFinalize(response, combinedMessages, name, numberPhone, userId, ctx, provider, flowDynamic, state)
+                    await stopPresenceSafe()
                 }, TIMEOUT_MS)
+                // Para legacy: el timeout corre en microtask; finally debe esperar
+                // que el timer fire sin colgar. Para no romper el flujo, si existe
+                // timeout activo, dejamos que finally pare el keep-alive después
+                // de un pequeño grace; keep-alive seguirá refrescando mientras.
             } else {
                 // ===== COORDINACIÓN COMPARTIDA (polling con waitForTurn) =====
                 const myState = state.getMyState() || {}
@@ -313,6 +385,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                     })
                     userBuffers[userId] = []
                     if (userTimeouts[userId]) { clearTimeout(userTimeouts[userId]); userTimeouts[userId] = null }
+                    await stopPresenceSafe()
                     return endFlow()
                 }
 
@@ -356,6 +429,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
 
                 await respondAndFinalize(response, combinedInput, name, numberPhone, userId, ctx, provider, flowDynamic, state, flowVersion)
+                await stopPresenceSafe()
             }
         } catch (error) {
             defaultLogger.error('Error en flujo texto (único addAction)', {
@@ -369,9 +443,17 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             })
         } finally {
             try {
-                // ✅ SÓLO presence paused + sleep (quitamos readMessages de aquí para no marcar sin responder)
-                await new Promise(resolve => setTimeout(resolve, 5000));
-                await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
+                // Mantener "escribiendo" hasta que el flow termine.
+                // El stopPresenceSafe ya se llama en las ramas exitosas;
+                // en finally aseguramos una parada extra defensiva sin sleep
+                // (no bloqueamos el finally con 5s más; presence.stop() envía paused).
+                await (async () => {
+                    try {
+                        if (provider?.vendor?.sendPresenceUpdate && ctx?.key?.remoteJid) {
+                            await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
+                        }
+                    } catch (_) {}
+                })()
             } catch (_) { /* no-op: vendor puede estar desconectado */ }
         }
     })

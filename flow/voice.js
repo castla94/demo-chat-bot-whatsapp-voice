@@ -30,6 +30,56 @@ import {
     waitForMyMessageEntryInBuffer
 } from '../helpers/conversationBuffer.js'
 
+// ============================================================
+// KEEP-ALIVE DE PRESENCIA ("escribiendo…")
+// ============================================================
+// WhatsApp Baileys borra el estado "composing" tras ~15s de inactividad.
+// Refrescamos cada PRESENCE_REFRESH_MS hasta stop().
+// ============================================================
+const PRESENCE_REFRESH_MS = 10 * 1000
+const startPresenceKeepAlive = (provider, jid, { presenceType = 'composing', file = 'voice.js' } = {}) => {
+    let stopped = false
+    let refreshTimer = null
+    const fireAndForgetSend = () => {
+        if (stopped || !provider || !provider?.vendor?.sendPresenceUpdate || !jid) return
+        ;(async () => {
+            try {
+                await provider.vendor.sendPresenceUpdate(presenceType, jid)
+                defaultLogger.debug('Presence keep-alive reenviado (audio flow)', {
+                    jid, presenceType,
+                    action: 'presence_keepalive_refresh',
+                    file
+                })
+            } catch (e) {
+                defaultLogger.debug('Presence keep-alive error silencioso (audio flow)', {
+                    jid, presenceType,
+                    error: e?.message || String(e),
+                    action: 'presence_keepalive_error_swallowed',
+                    file
+                })
+            }
+        })()
+    }
+    fireAndForgetSend()
+    refreshTimer = setInterval(fireAndForgetSend, PRESENCE_REFRESH_MS)
+    const stop = async () => {
+        if (stopped) return
+        stopped = true
+        if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+        try {
+            if (provider?.vendor?.sendPresenceUpdate && jid) {
+                await provider.vendor.sendPresenceUpdate('paused', jid)
+                defaultLogger.debug('Presence keep-alive detenido → paused (audio flow)', {
+                    jid, presenceType,
+                    action: 'presence_keepalive_stopped',
+                    file
+                })
+            }
+        } catch (_) {}
+    }
+    return { stop }
+}
+
  
 // Function to check premium plan status
 const checkPremiumPlan = async (userId, numberPhone, name, provider) => {
@@ -239,8 +289,16 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
                 await state.update({ history: historyDB })
             }
 
-            // 1. Enviar estado "escribiendo"
-            await provider.vendor.sendPresenceUpdate('composing', ctx.key.remoteJid)
+            // ===== KEEP-ALIVE PRESENCIA "escribiendo…" =====
+            // Mantener estado durante: transcripción + polling de 25s + IA + respuesta.
+            // WhatsApp borra composing tras ~15s → refrescamos cada 10s.
+            const presence = startPresenceKeepAlive(provider, ctx.key.remoteJid, {
+                presenceType: 'composing', file: 'voice.js'
+            })
+            const stopPresenceSafe = async () => {
+                try { await new Promise(resolve => setTimeout(resolve, 5000)) } catch (_) {}
+                try { await presence.stop() } catch (_) {}
+            }
 
             defaultLogger.info('Iniciando etapa de transcripción y respuesta (audio - único addAction)', {
                 userId, numberPhone, name, profilePictureUrl,
@@ -257,6 +315,7 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             })
             if (transcribedText === "ERROR") {
                 await provider.sendMessage(numberPhone, "Disculpa, no entendí tu mensaje. Por favor, puedes enviarlo de nuevo.", { media: null })
+                await stopPresenceSafe()
                 return endFlow()
             }
 
@@ -291,7 +350,10 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
 
             // Alarma user-side
             const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, transcribedText, transcribedText, "user")
-            if (shouldEndFlow) return endFlow()
+            if (shouldEndFlow) {
+                await stopPresenceSafe()
+                return endFlow()
+            }
 
             if (flowVersion <= 0) {
                 // ====== CAMINO LEGACY (sin coordinación compartida) =====
@@ -309,15 +371,19 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
                     file: 'voice.js'
                 })
                 const shouldEndFlow2 = await processAlarm(ctx, numberPhone, name, provider, response, transcribedText, "IA")
-                if (shouldEndFlow2) return endFlow()
+                if (shouldEndFlow2) {
+                    await stopPresenceSafe()
+                    return endFlow()
+                }
                 // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run + alarm IA, antes de enviar respuesta)
                 try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
                 await respondAndFinalize(response, transcribedText, name, numberPhone, userId, ctx, provider, flowDynamic, state)
+                await stopPresenceSafe()
                 return null
             }
 
             // ====== CAMINO COORDINADO ======
-            // Esperar turno (45s silencio + todos listos + yo soy última versión)
+            // Esperar turno (25s silencio + todos listos + yo soy última versión)
             const turn = await waitForTurn(numberPhone, {
                 flowVersion,
                 flowType: 'audio',
@@ -333,6 +399,7 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
                     action: 'conversation_audio_cede',
                     file: 'voice.js'
                 })
+                await stopPresenceSafe()
                 return endFlow()
             }
 
@@ -371,12 +438,16 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             // ✅ REGLA DE NEGOCIO: no hay 2ª validación isStillMyTurn aquí.
             //    Si llegamos hasta aquí con respuesta IA, se envía sí o sí.
             const shouldEndFlow2 = await processAlarm(ctx, numberPhone, name, provider, response, transcribedText, "IA")
-            if (shouldEndFlow2) return endFlow()
+            if (shouldEndFlow2) {
+                await stopPresenceSafe()
+                return endFlow()
+            }
 
             // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run + alarm IA, antes de enviar respuesta)
             try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
 
             await respondAndFinalize(response, combinedInput, name, numberPhone, userId, ctx, provider, flowDynamic, state, flowVersion)
+            await stopPresenceSafe()
 
         } catch (error) {
             defaultLogger.error('Error en flujo audio (único addAction)', {
@@ -389,9 +460,12 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             return endFlow()
         } finally {
             try {
-                // ✅ SÓLO presence paused + sleep (quitamos readMessages de aquí para no marcar sin responder)
-                await new Promise(resolve => setTimeout(resolve, 5000));
-                await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid)
+                // Parada defensiva (siempre paused). El stopPresenceSafe con
+                // sleep+stop ya fue llamado en las ramas exitosas; aquí enviamos
+                // una orden rápida sin esperar 5s para no bloquear finally.
+                if (provider?.vendor?.sendPresenceUpdate && ctx?.key?.remoteJid) {
+                    try { await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid) } catch (_) {}
+                }
             } catch (_) { /* no-op */ }
         }
     })

@@ -10,24 +10,37 @@ import { defaultLogger } from './cloudWatchLogger.js';
 // La clave es la VERSIÓN GLOBAL: cada mensaje RECIBIDO (físico del usuario)
 // incrementa la versión, y el flujo solo responde si:
 //   1) su versión coincide con la versión vigente (es el último msg)
-//   2) pasaron 10s desde el último mensaje recibido
+//   2) pasó la ventana dinámica de silencio desde el último mensaje
+//        - Texto / Audio: 5s
+//        - Imagen (último mensaje): 45s (da tiempo al usuario a enviar
+//          caption/texto de contexto después de la imagen)
 //   3) TODOS los mensajes de la ventana están "ready" (procesados)
 //
 // Los timers pueden coexistir: todos se disparan, solo el "último"
 // (mayor versión) adquiere el turno y responde.
 // ============================================================
 
-const SILENCE_WINDOW_MS = 10 * 1000
+// ============================================================
+// VENTANAS DE SILENCIO DINÁMICAS POR TIPO
+// ============================================================
+// TEXTO / AUDIO: 5s  (rápido, no requieren contexto adicional)
+// IMAGEN (último msg): 45s (esperar caption/texto de contexto del usuario)
+// ============================================================
+const SILENCE_TEXT_AUDIO_MS = 5 * 1000
+const SILENCE_IMAGE_MS = 45 * 1000
+
 const POLL_TICK_MS = 1000
 const MAX_WAIT_MS = 15 * 60 * 1000 // hard limit para no colgar polling para siempre
 
 // ============================================================
-// Ventana de ESTABILIZACIÓN por ráfagas (mixtas texto+audio+imagen).
-// Fix: "envío texto + audio rápido (<3s) y texto se invalida erróneamente".
-// Estabilización = 3s.
-// Dentro de la VENTANA GLOBAL DE 10s de silencio, NUNCA se invalida por tipo.
+// Ventana de ESTABILIZACIÓN por ráfagas (dinámica por tipo).
+// Fix: "envío texto + audio rápido (<1s) y texto se invalida erróneamente".
+// - Texto/Audio: 1.5s (rápido)
+// - Imagen: 5s (coincide con el inicio del largo silencio de imagen).
 // ============================================================
-const FLOW_VERSION_STABILIZATION_MS = 3 * 1000
+const STABILIZATION_TEXT_AUDIO_MS = 1500
+const STABILIZATION_IMAGE_MS = 5 * 1000
+
 const MY_MESSAGE_ENTRY_TICK_MS = 100
 const MY_MESSAGE_ENTRY_WAIT_MS = 4 * 1000
 
@@ -45,18 +58,18 @@ const TURN_LOCK_SAME_TYPE_DEADLOCK_MS = 10 * 1000
 //   la conversación quedaba en limbo infinito.
 //
 // Solución:
-//   1) ORPHAN_RESCUE_MS = SILENCE_WINDOW_MS (10s): después de invalidación,
-//      si el siguiente flow que intenta ceder detecta que ya pasaron 10s
-//      de silencio y hay mensajes listos → ÉL MISMO rescata y responde
-//      (aunque no sea "su" versión).
-//   2) INVALIDATION_RESET_TTL_MS = 30 * 1000: si desde la invalidación
-//      pasan 30s Y NADIE ha cambiado la versión (ni rescató ni respondió),
+//   1) ORPHAN_RESCUE: usa la misma ventana dinámica de silencio según
+//      lastMeaningfulType (5s texto/audio, 45s imagen). Después de ese
+//      tiempo sin dueño, el flow que intenta ceder rescata y responde.
+//   2) INVALIDATION_RESET_TTL_MS = 60 * 1000: si desde la invalidación
+//      pasan 60s Y NADIE ha cambiado la versión (ni rescató ni respondió),
 //      se hace RESET COMPLETO de la conversación (version=0, messages=[]).
 //      El siguiente mensaje de texto empieza desde 0, sin desfase.
+//      (Aumentado de 30s a 60s para no resetear ráfagas de imagen 45s.)
 //   3) GREETINGS_RESET: si el usuario escribe "hola/buenos días/etc"
 //      y la conversación está huérfana (≥2min sin responder) → reset.
 // ============================================================
-const INVALIDATION_RESET_TTL_MS = 30 * 1000
+const INVALIDATION_RESET_TTL_MS = 60 * 1000
 const GREETINGS_ORPHAN_RESET_MS = 2 * 60 * 1000
 const GREETINGS_KEYWORDS = ['hola', 'buenos dias', 'buenas tardes', 'buenas noches', 'que tal', 'alo', 'buen dia', 'holi', 'holaa', 'hey', 'hi', 'hello']
 
@@ -186,7 +199,6 @@ const ensureConversation = (phone) => {
             },
             cleanupTimer: null,
             turnAcquiredLock: null,
-            // ============================================================
             // firstFlowVersionByType: { text: 1, audio: 3, image: 4 }
             // Guarda cuál fue la PRIMERA versión de cada tipo (el FLOW OWNER
             // que tiene permitido ganar y combinar todos los mensajes de esa ráfaga).
@@ -194,9 +206,9 @@ const ensureConversation = (phone) => {
             //   ceden turn lock automáticamente al OWNER (texto 1) para que este
             //   haga el combinedInput con TODO.
             // NUEVOS flows de TIPO DIFERENTE (ej, imagen 4 llegó después de texto 1)
-            //   → si está DENTRO de 10s de la ráfaga, NO ceden, ambos siguen vivos
-            //     y el OWNER de tipo que coincida con el ÚLTIMO mensaje al vencer
-            //     silencio es el que responde (por la lógica de arriba del shouldCede).
+            //   → si está DENTRO de la ventana dinámica de silencio (5s texto/audio,
+            //     45s imagen), NO ceden, ambos siguen vivos y el OWNER cuyo tipo
+            //     coincide con el ÚLTIMO mensaje al vencer silencio responde.
             // ============================================================
             firstFlowVersionByType: {},
             // ============================================================
@@ -991,7 +1003,7 @@ export const waitForTurn = async (phone, {
         flowVersion,
         currentVersion: conv.version,
         action: 'conversation_polling_start',
-        silenceWindowMs: SILENCE_WINDOW_MS,
+        silenceWindowRule: '5s texto/audio, 45s imagen (último mensaje)',
         tickMs: POLL_TICK_MS,
         bufferCount: conv.messages.length,
         file
@@ -1105,19 +1117,33 @@ export const waitForTurn = async (phone, {
         const lastMeaningful = getLastMeaningfulMessage(conv)
         const lastMeaningfulType = lastMeaningful ? String(lastMeaningful.type).toLowerCase() : null
         const sinceLastActivity = conv.lastActivityAt ? (now - conv.lastActivityAt) : 0
-        const inSilenceWindow45s = sinceLastActivity < SILENCE_WINDOW_MS
-        const inStabilizationWindow = sinceLastActivity < FLOW_VERSION_STABILIZATION_MS
+
+        // ============================================================
+        // HELPER: ventana dinámica según tipo del ÚLTIMO mensaje significativo.
+        // - Texto/Audio: 5s silencio + 1.5s estabilización (rápido)
+        // - Imagen: 45s silencio + 5s estabilización (dar tiempo al usuario
+        //   a enviar caption/texto de contexto después de la imagen sola)
+        // - Sin tipo aún (frontera): texto por defecto (mínimo 5s)
+        // ============================================================
+        const isLastImage = (lastMeaningfulType === 'image')
+        const silenceWindowMs = isLastImage ? SILENCE_IMAGE_MS : SILENCE_TEXT_AUDIO_MS
+        const stabilizationMs = isLastImage ? STABILIZATION_IMAGE_MS : STABILIZATION_TEXT_AUDIO_MS
+
+        const inSilenceWindow45s = sinceLastActivity < silenceWindowMs
+        const inStabilizationWindow = sinceLastActivity < stabilizationMs
 
         // ============================================================
         // NUEVA REGLA DE INVALIDACIÓN (DEFINITIVA):
         //
-        // DENTRO DE LA VENTANA DE 10s DE SILENCIO (RÁFAGA ACTIVA):
-        //   🟢 NUNCA CEDER POR TIPO DISTINTO (texto 1, audio 2, imagen 3 dentro de 10s).
-        //      Todos los flows distintos siguen vivos esperando.
-        //   🟡 SOLO CEDEN flows NUEVOS de MISMO TIPO que NO son OWNER:
-        //      → texto 1 (owner) vs texto 2 (no owner) → texto 2 cede después de 3s estabilización.
+        // DENTRO DE VENTANA DINÁMICA DE SILENCIO (RÁFAGA ACTIVA):
+        //   🟢 NUNCA CEDER POR TIPO DISTINTO
+        //      (texto 1, audio 2 dentro 5s o imagen 3 dentro 45s: siguen vivos).
+        //   🟡 SOLO CEDEN flows NUEVOS de MISMO TIPO que NO son OWNER,
+        //      pero DENTRO de la ventana de silencio NO ceden nunca
+        //      (igual que el resto). La cesión solo sucede FUERA de ventana,
+        //      por tipo distinto al último.
         //
-        // FUERA DE VENTANA (pasado 10s sin nueva actividad):
+        // FUERA DE VENTANA (pasó ventana dinámica sin nueva actividad):
         //   🟢 Si yo soy el tipo que coincide con el último mensaje significativo → NO ceder, ganar.
         //   🔴 Si yo NO coincido con el último tipo (y no tiene sentido espere más) → ceder.
         // ============================================================
@@ -1126,22 +1152,20 @@ export const waitForTurn = async (phone, {
 
         if (inSilenceWindow45s) {
             // ==================================================================
-            // DENTRO DE VENTANA 10s (RÁFAGA ACTIVA):
+            // DENTRO DE VENTANA DINÁMICA (RÁFAGA ACTIVA):
             //   🔥 NUNCA CEDER POR NADA — EXPLÍCITO POR REGLAS DE NEGOCIO.
             //
-            //   - TIPOS DISTINTOS (texto 1, audio 2, imagen 3 dentro de 10s):
-            //        TODOS siguen vivos esperando (por combinación mixed).
-            //   - MISMO TIPO non-owner (texto 1 owner + texto 2 non-owner):
-            //        NO ceder dentro de 10s (evita limbo por si el owner nunca
-            //        entró por race listener/timeout). Ambos esperan, y a los 10s
-            //        el que adquiera turno lock primero responde TODO, el otro
-            //        cede limpiamente por turnLock (mismo tipo deadlock 10s safety).
+            //   - TIPOS DISTINTOS: todos siguen vivos esperando (combinación mixed).
+            //   - MISMO TIPO non-owner: no ceder dentro ventana (evita limbo por
+            //     race listener/timeout). Ambos esperan, fuera de ventana el que
+            //     adquiera turno lock primero responde TODO, el otro cede por
+            //     turnLock (mismo tipo deadlock 10s safety).
             // ==================================================================
             shouldCede = false
             cedeReason = null
         } else {
             // ==================================================================
-            // FUERA DE VENTANA 10s (RÁFAGA TERMINÓ):
+            // FUERA DE VENTANA DINÁMICA (RÁFAGA TERMINÓ):
             //   Solo gana el flow cuyo tipo coincida con EL ÚLTIMO mensaje de la ráfaga.
             //   Todos los demás tipos ceden (no tienen dueño del último mensaje).
             // ==================================================================
@@ -1159,15 +1183,15 @@ export const waitForTurn = async (phone, {
         // ============================================================
         if (inStabilizationWindow && (!lastLogAt || (now - lastLogAt) > 1000)) {
             lastLogAt = now
-            defaultLogger.debug('Flujo en ráfaga/estabilización < 3s: sigue vivo, no se invalida', {
+            defaultLogger.debug('Flujo en ráfaga/estabilización: sigue vivo, no se invalida', {
                 phoneKey, phone,
                 flowType: flowTypeNorm, flowId, flowVersion,
                 imOwnerOfMyType,
                 ownerVersionForMyType: conv.firstFlowVersionByType?.[flowTypeNorm] || 0,
                 lastType: lastMeaningfulType,
                 sinceLastActivityMs: sinceLastActivity,
-                stabilizationMs: FLOW_VERSION_STABILIZATION_MS,
-                silenceWindowMs: SILENCE_WINDOW_MS,
+                stabilizationMs,
+                silenceWindowMs,
                 insideSilenceWindow: inSilenceWindow45s,
                 aliveFlowsCountNow: conv.aliveFlowsCount,
                 shouldCedeNow: shouldCede,
@@ -1180,12 +1204,12 @@ export const waitForTurn = async (phone, {
         if (shouldCede) {
             // ============================================================
             // ORPHAN RESCUE: antes de ceder, ¿está huérfana sin dueño respondiendo?
-            //   (allReady + 10s silencio)
+            //   (allReady + se cumplió la ventana dinámica de silencio)
             // ============================================================
             const meaningfulMessagesCurr = conv.messages.filter(m => isValidType(m.type))
             const anyPendingMeaningfulCurr = meaningfulMessagesCurr.some(m => m.status === 'pending')
             const allReadyMeaningfulCurr = meaningfulMessagesCurr.length > 0 && !anyPendingMeaningfulCurr
-            const silenceCompletedCurr = sinceLastActivity >= SILENCE_WINDOW_MS
+            const silenceCompletedCurr = sinceLastActivity >= silenceWindowMs
             if (meaningfulMessagesCurr.length > 0 && allReadyMeaningfulCurr && silenceCompletedCurr) {
                 // 🔥 MARCAR TURNO LOCK TAMBIÉN AQUÍ (antes de return)
                 // Para evitar que un 3er flow en mismo tick entre por ORPHAN RESCUE duplicado.
@@ -1216,10 +1240,10 @@ export const waitForTurn = async (phone, {
             }
 
             // ============================================================
-            // PROGRAMAR TTL 30s RESET SOLO EN CASO EXTREMO (fuera de 10s,
+            // PROGRAMAR TTL 60s RESET SOLO EN CASO EXTREMO (fuera de ventana,
             // no hay dueño claro y nadie responde).
             // SIEMPRE que llega un mensaje nuevo después se CANCELA ESTE TIMER,
-            // así no borramos ráfagas válidas.
+            // así no borramos ráfagas válidas (incluyendo imagen 45s).
             // ============================================================
             if (!inSilenceWindow45s) {
                 scheduleInvalidationReset(conv, phoneKey, phone, file)
@@ -1231,6 +1255,7 @@ export const waitForTurn = async (phone, {
                 lastType: lastMeaningfulType,
                 sinceLastActivityMs: sinceLastActivity,
                 insideSilenceWindow45s: inSilenceWindow45s,
+                silenceWindowUsedMs: silenceWindowMs,
                 imOwnerOfMyType,
                 ownerVersionForMyType: conv.firstFlowVersionByType?.[flowTypeNorm] || 0,
                 aliveFlowsCountNow: conv.aliveFlowsCount,
@@ -1256,7 +1281,7 @@ export const waitForTurn = async (phone, {
         const allReadyMeaningful = meaningfulMessages.length > 0 && !anyPendingMeaningful
         const anyPending = conv.messages.some(m => m.status === 'pending')
         const allReady = allReadyMeaningful
-        const silenceCompleted = sinceLastActivity >= SILENCE_WINDOW_MS
+        const silenceCompleted = sinceLastActivity >= silenceWindowMs
 
         // Cada ~5s log del polling.
         if (!lastLogAt || (now - lastLogAt) > 5000) {
@@ -1278,7 +1303,8 @@ export const waitForTurn = async (phone, {
                 allReady, allReadyMeaningful,
                 anyPending, anyPendingMeaningful,
                 silenceElapsedMs: silenceElapsed,
-                remainingSilenceMs: Math.max(0, SILENCE_WINDOW_MS - silenceElapsed),
+                silenceWindowUsedMs: silenceWindowMs,
+                remainingSilenceMs: Math.max(0, silenceWindowMs - silenceElapsed),
                 turnAcquiredByOther: Boolean(conv.turnAcquiredLock),
                 turnLockOwnerFlowId: conv.turnAcquiredLock?.flowId || null,
                 turnLockOwnerType: conv.turnAcquiredLock?.flowType || null,
@@ -1447,12 +1473,18 @@ export const clearConversationAfterResponse = (phone, {
     // FIX IMPORTANTE: NUNCA PERDER MENSAJES NUEVOS QUE LLEGARON
     // DURANTE EL PROCESAMIENTO DE LA IA.
     //
-    // Escenario normal:
+    // Escenario normal (texto):
     //   T=0s Usuario envía msg 1 (version=1)
-    //   T=10s Flujo adquiere turno, llama a run()
-    //   T=13s (mientras IA piensa) Usuario envía msg 2 (version=2)
-    //   T=15s run() termina, flujo original responde con version finalVersion=1
-    //   T=15s clearConversationAfterResponse(1) es llamado.
+    //   T=5s Flujo adquiere turno (ventana texto=5s), llama a run()
+    //   T=7s (mientras IA piensa) Usuario envía msg 2 (version=2)
+    //   T=10s run() termina, flujo original responde con version finalVersion=1
+    //   T=10s clearConversationAfterResponse(1) es llamado.
+    //
+    // Escenario imagen (ventana 45s):
+    //   T=0s Usuario envía imagen (version=1)
+    //   T=45s Flujo imagen adquiere turno, llama a run()
+    //   T=47s Usuario envía texto de contexto (version=2)
+    //   T=50s run() termina, responde con v=1; clearConversationAfterResponse(1).
     //
     // ANTES: conv.messages = [] (TODO borrado). msg 2 se perdía. 🔴
     // AHORA: solo borro mensajes con version<=1. msg 2 se conserva! 🟢
