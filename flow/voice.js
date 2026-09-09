@@ -172,7 +172,7 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             // ✅ NUEVA LÓGICA: esperar a que ESTE mensaje esté en el buffer
             // (por race condition nuestro listener Baileys puede correrse DESPUÉS de BBot).
             // Cuando encontramos la entry de AUDIO propia → tomamos entry.version como flowVersion.
-            const {
+            let {
                 version: myVersion,
                 entryId: myAudioEntryId,
                 matchedBy: myMatchType
@@ -182,6 +182,19 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
                 contentCandidate: '', // audio no tiene contenido de texto directo (lo buscamos por id/type)
                 file: 'voice.js'
             })
+            // GUARD: timeout sin entry → skip camino coordinado (va a legacy
+            // sin esperar 8s del watchdog de waitForTurn).
+            if (myMatchType === 'timeout_fallback_global_version' && Number(myVersion || 0) <= 0) {
+                defaultLogger.warn('WaitForMyEntry timeout → camino LEGACY (audio sin coordinación). Listener Baileys no insertó mensaje en buffer', {
+                    userId, numberPhone, name,
+                    myMatchType,
+                    fallbackVersion: Number(myVersion || 0),
+                    action: 'conversation_flow_skip_coordinated_timeout_myentry',
+                    file: 'voice.js'
+                })
+                myVersion = 0
+                if (myAudioEntryId) myAudioEntryId = null
+            }
             let pendingAudio = myAudioEntryId ? { entryId: myAudioEntryId } : consumeLatestPendingOfType(numberPhone, 'audio')
             const convStateBefore = getConversationState(numberPhone)
             defaultLogger.info('Conversación compartida (audio - snapshot después de encontrar mi entry)', {

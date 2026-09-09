@@ -33,6 +33,15 @@ const POLL_TICK_MS = 1000
 const MAX_WAIT_MS = 15 * 60 * 1000 // hard limit para no colgar polling para siempre
 
 // ============================================================
+// WATCHDOG: BUFFER VACÍO SIN ENTRY.
+// Si waitForTurn arranca (el addAction de BuilderBot disparó) pero
+// el listener Baileys NUNCA insertó el mensaje en el buffer
+// (addReceivedFromRawMessage) — por race, por doble registerListener,
+// por sock null, etc. — no debemos esperar 15min. Cancelamos en 8s.
+// ============================================================
+const BUFFER_ENTRY_TIMEOUT_MS = 8 * 1000
+
+// ============================================================
 // Ventana de ESTABILIZACIÓN por ráfagas (dinámica por tipo).
 // Fix: "envío texto + audio rápido (<1s) y texto se invalida erróneamente".
 // - Texto/Audio: 1.5s (rápido)
@@ -1058,6 +1067,68 @@ export const waitForTurn = async (phone, {
 
     while (true) {
         const now = Date.now()
+        const elapsedTotalMs = now - startedAt
+
+        // ============================================================
+        // CÁLCULOS GLOBALES PRIMERO (orden correcto, sin refs forward).
+        // lastMeaningful / sinceLastActivity necesarios en: firstTickLog,
+        // watchdog empty buffer, ventanas dinámicas, silenceCompleted, etc.
+        // ============================================================
+        const lastMeaningful = getLastMeaningfulMessage(conv)
+        const lastMeaningfulType = lastMeaningful ? String(lastMeaningful.type).toLowerCase() : null
+        const sinceLastActivity = conv.lastActivityAt ? (now - conv.lastActivityAt) : 0
+
+        const totalMessagesInConv = conv.messages.length
+        const totalValidInConv = conv.messages.filter(m => isValidType(m.type)).length
+
+        // ============================================================
+        // PRIMER TICK + WATCHDOG BUFFER VACÍO.
+        // ============================================================
+        if (elapsedTotalMs < POLL_TICK_MS + 2) {
+            defaultLogger.info('Polling primer tick: estado actual del buffer', {
+                phoneKey, phone,
+                flowType: flowTypeNorm, flowId, flowVersion,
+                currentVersion: conv.version,
+                lastActivityAt: conv.lastActivityAt ? new Date(conv.lastActivityAt).toISOString() : null,
+                sinceLastActivityMs: sinceLastActivity,
+                totalMessagesInConv,
+                totalValidInConv,
+                aliveFlowsCountNow: conv.aliveFlowsCount,
+                lastType: lastMeaningfulType || null,
+                turnAcquiredByOther: Boolean(conv.turnAcquiredLock),
+                elapsedTotalMs,
+                bufferEntryTimeoutRemaining: Math.max(0, BUFFER_ENTRY_TIMEOUT_MS - elapsedTotalMs),
+                action: 'conversation_polling_first_tick_snapshot',
+                file
+            })
+        }
+        if (elapsedTotalMs >= BUFFER_ENTRY_TIMEOUT_MS && totalValidInConv === 0) {
+            if (conv.turnAcquiredLock && conv.turnAcquiredLock.flowId === flowId) {
+                conv.turnAcquiredLock = null
+            }
+            defaultLogger.warn('Polling BUFFER VACÍO después de watchdog timeout: listener Baileys no insertó mensaje', {
+                phoneKey, phone,
+                flowType: flowTypeNorm, flowId, flowVersion,
+                currentVersion: conv.version,
+                lastActivityAt: conv.lastActivityAt ? new Date(conv.lastActivityAt).toISOString() : null,
+                totalMessagesInConv,
+                totalValidInConv,
+                aliveFlowsCountNow: conv.aliveFlowsCount,
+                waitedMs: elapsedTotalMs,
+                bufferEntryTimeoutMs: BUFFER_ENTRY_TIMEOUT_MS,
+                action: 'conversation_polling_buffer_empty_timeout',
+                note: 'Causa probable: race en registerListener, sock null, o filtro anti-noise descartó el mensaje. Ver logs conversation_listener_* en app.js.',
+                file
+            })
+            decrementAlive()
+            return {
+                acquired: false,
+                cancelReason: 'buffer_empty_no_message_within_timeout',
+                combinedInput: null,
+                finalVersion: conv.version,
+                bufferEmpty: true
+            }
+        }
 
         // ============================================================
         // 🔥 PRIMERO: check TURNO DUPLICADO (turnAcquiredLock).
@@ -1075,7 +1146,6 @@ export const waitForTurn = async (phone, {
             const deadlockBroken = sameTypeAsLock && lockAgeMs >= TURN_LOCK_SAME_TYPE_DEADLOCK_MS
 
             if (!isLockMe && !deadlockBroken) {
-                // 🔥 Si otro flow ya tomó lock → cede inmediatamente, NO ORPHAN RESCUE.
                 if (!lastLogAt || (now - lastLogAt) > 5000) {
                     lastLogAt = now
                     defaultLogger.info('Flujo NO adquiere turno (lock previo): otro flujo ya adquirió', {
@@ -1113,10 +1183,6 @@ export const waitForTurn = async (phone, {
                 conv.turnAcquiredLock = null
             }
         }
-
-        const lastMeaningful = getLastMeaningfulMessage(conv)
-        const lastMeaningfulType = lastMeaningful ? String(lastMeaningful.type).toLowerCase() : null
-        const sinceLastActivity = conv.lastActivityAt ? (now - conv.lastActivityAt) : 0
 
         // ============================================================
         // HELPER: ventana dinámica según tipo del ÚLTIMO mensaje significativo.

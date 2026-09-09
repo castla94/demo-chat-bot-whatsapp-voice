@@ -248,7 +248,7 @@ export const media = addKeyword(EVENTS.MEDIA)
             // ✅ NUEVA LÓGICA: esperar a que ESTE mensaje esté en el buffer
             // (por race condition nuestro listener Baileys puede correrse DESPUÉS de BBot).
             // Cuando encontramos la entry de IMAGEN propia → tomamos entry.version como flowVersion.
-            const {
+            let {
                 version: myVersion,
                 entryId: myImageEntryId,
                 matchedBy: myMatchType
@@ -258,6 +258,20 @@ export const media = addKeyword(EVENTS.MEDIA)
                 contentCandidate: String(mediaCaption || ''),
                 file: 'media.js'
             })
+            // GUARD: timeout sin entry → skip camino coordinado.
+            // Para imagen: si myVersion=0 → no marca imagen pending throttled en buffer,
+            // y guarda archivo igual. Luego entra al legacy (<=0) y responde.
+            if (myMatchType === 'timeout_fallback_global_version' && Number(myVersion || 0) <= 0) {
+                defaultLogger.warn('WaitForMyEntry timeout → camino LEGACY (imagen sin coordinación). Listener Baileys no insertó mensaje en buffer', {
+                    userId, numberPhone, name,
+                    myMatchType,
+                    fallbackVersion: Number(myVersion || 0),
+                    action: 'conversation_flow_skip_coordinated_timeout_myentry',
+                    file: 'media.js'
+                })
+                myVersion = 0
+                if (myImageEntryId) myImageEntryId = null
+            }
             let pendingImage = myImageEntryId ? { entryId: myImageEntryId } : consumeLatestPendingOfType(numberPhone, 'image')
             const convStateBefore = getConversationState(numberPhone)
             defaultLogger.info('Conversación compartida (imagen - snapshot después de encontrar mi entry)', {

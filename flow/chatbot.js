@@ -178,7 +178,7 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             //  puede correrse DESPUÉS de BuilderBot addAction).
             // Cuando encontramos nuestra propia entry en conv.messages → tomamos
             // entry.version como flowVersion. Así SIN DESFASE sin importar orden.
-            const {
+            let {
                 version: myVersion,
                 entryId: myConversationEntryId,
                 matchedBy: myMatchType
@@ -188,6 +188,26 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 contentCandidate: String(ctx.body || ''),
                 file: 'chatbot.js'
             })
+            // ============================================================
+            // GUARD: si waitForMyMessageEntryInBuffer hizo timeout (fallback
+            // a version global porque el listener Baileys NUNCA insertó
+            // el mensaje en buffer), DESCARTAMOS camino coordinado.
+            // Forzamos myVersion=0 para que entre al legacy fallback de
+            // 5s y responda sin coordinación (no se queda esperando 8s
+            // extra del watchdog buffer_empty).
+            // ============================================================
+            if (myMatchType === 'timeout_fallback_global_version' && Number(myVersion || 0) <= 0) {
+                defaultLogger.warn('WaitForMyEntry timeout → camino LEGACY (texto sin coordinación). Listener Baileys no insertó mensaje en buffer', {
+                    userId, numberPhone, name,
+                    myMatchType,
+                    fallbackVersion: Number(myVersion || 0),
+                    legacyTimeoutMs: TIMEOUT_MS,
+                    action: 'conversation_flow_skip_coordinated_timeout_myentry',
+                    file: 'chatbot.js'
+                })
+                myVersion = 0
+                if (myConversationEntryId) myConversationEntryId = null
+            }
             const convStateBefore = getConversationState(numberPhone)
             defaultLogger.info('Conversación compartida (texto - snapshot después de encontrar mi entry)', {
                 userId,
