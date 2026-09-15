@@ -22,7 +22,8 @@ const MIME_EXTENSION_MAP = {
     'text/plain': 'txt',
     'image/jpeg': 'jpg',
     'image/jpg': 'jpg',
-    'image/png': 'png'
+    'image/png': 'png',
+    'image/webp': 'webp'
 };
 
 const getFileExtensionFromBase64 = (base64Media, type) => {
@@ -255,7 +256,8 @@ const attachIncomingConversationListener = (adapterProvider) => {
                 const m = message.message
                 const noisyTypes = ['reactionMessage','senderKeyDistributionMessage','protocolMessage',
                     'receiptMessage','pollUpdateMessage','pollCreationMessage','call','commentMessage',
-                    'groupInviteLinkMessage','groupMentionedMessage']
+                    'groupInviteLinkMessage','groupMentionedMessage','stickerMessage','pinInChatMessage',
+                    'eventResponseMessage','eventMessage','reaction']
                 let isNoisy = false
                 for (const nt of noisyTypes) if (m[nt]) { isNoisy = true; break }
                 if (isNoisy) {

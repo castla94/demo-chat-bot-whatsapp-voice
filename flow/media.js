@@ -380,12 +380,32 @@ export const media = addKeyword(EVENTS.MEDIA)
             }
 
             // ===== PROCESAR Y GUARDAR LA IMAGEN (1 SOLA VEZ AHORA - antes estaba duplicado) =====
-            const pathImg = await provider.saveFile(ctx, { path: `${process.cwd()}/media/` })
-            defaultLogger.info('Imagen guardada', {
-                userId, numberPhone, name, pathImg,
-                action: 'image_saved',
-                file: 'media.js'
-            })
+            // Protegemos SAVE + PROCESS individualmente con try/catch interno.
+            // Si sharp/webp o lo que sea falla en runtime, NO colgamos BuilderBot,
+            // NO hacemos que el usuario reciba silencio. Si es procesable sigue
+            // camino normal. Si NO, enviamos un mensaje SUAVE al usuario
+            // ("no pude procesar la imagen") y terminamos limpio.
+            // Esto evita que 1 imagen webp corrupta bloquee TODOS los mensajes
+            // siguientes en la cola secuencial del mismo número.
+            let pathImg = null
+            let saveImageError = null
+            try {
+                pathImg = await provider.saveFile(ctx, { path: `${process.cwd()}/media/` })
+                defaultLogger.info('Imagen guardada', {
+                    userId, numberPhone, name, pathImg,
+                    action: 'image_saved',
+                    file: 'media.js'
+                })
+            } catch (errSave) {
+                saveImageError = errSave
+                defaultLogger.error('Error al guardar imagen (saveFile). Terminamos flow limpio sin colgar.', {
+                    userId, numberPhone, name,
+                    error: errSave?.message || String(errSave),
+                    stack: errSave?.stack || null,
+                    action: 'image_savefile_error_graceful',
+                    file: 'media.js'
+                })
+            }
 
             // ===== KEEP-ALIVE PRESENCIA "escribiendo…" =====
             // Mantener estado durante: análisis de imagen + polling 25s + IA + respuesta.
@@ -414,6 +434,38 @@ export const media = addKeyword(EVENTS.MEDIA)
                 await stopPresenceSafe()
             }
 
+            // ============================================================
+            // PATH RÁPIDO: si el saveFile falló (webp corrupto, error sharp
+            // pre-save, path sin permisos, etc.) — respondemos SOFT y salimos.
+            // ============================================================
+            if (saveImageError || !pathImg) {
+                try {
+                    const softReply = (mediaCaption && String(mediaCaption).trim())
+                        ? `No pude procesar la imagen que enviaste 😅. Pero vi tu texto: "${String(mediaCaption).trim().slice(0, 120)}". Puedes volver a enviar la imagen en JPG/PNG/WebP si lo necesitas.`
+                        : `No pude procesar la imagen que enviaste 😅. Inténtala nuevamente en JPG/PNG/WebP, o describe en texto lo que necesites.`
+                    try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
+                    try {
+                        await provider.sendMessage(numberPhone, softReply, { media: null })
+                    } catch (_sendErr) {}
+                    defaultLogger.warn('Imagen no guardada → soft reply enviado (flujo termina GRACEFUL).', {
+                        userId, numberPhone, name,
+                        hasCaption: Boolean(mediaCaption && String(mediaCaption).trim()),
+                        saveImageErrorMessage: saveImageError?.message || null,
+                        action: 'image_savefile_error_soft_reply',
+                        file: 'media.js'
+                    })
+                } catch (_softErr) {
+                    defaultLogger.debug('Error enviando soft reply de imagen no procesada', {
+                        userId, numberPhone, name,
+                        error: _softErr?.message || String(_softErr),
+                        action: 'image_soft_reply_error_swallowed',
+                        file: 'media.js'
+                    })
+                }
+                await cleanupImageAndPresence(null)
+                return endFlow()
+            }
+
             defaultLogger.info('Iniciando etapa de análisis y respuesta (imagen - único addAction)', {
                 userId, numberPhone, name, mediaCaption,
                 action: 'image_response_stage_start',
@@ -421,13 +473,36 @@ export const media = addKeyword(EVENTS.MEDIA)
             })
 
             // ===== ANÁLISIS DE IMAGEN =====
-            const responseImage = await processImage(pathImg, numberPhone, name)
-            if (!responseImage) {
-                defaultLogger.info('Procesamiento imagen retornó vacío', {
+            let responseImage = null
+            let processImageError = null
+            try {
+                responseImage = await processImage(pathImg, numberPhone, name)
+            } catch (errProc) {
+                processImageError = errProc
+                defaultLogger.error('Error processImage (runtime sharp/openai o imagen corrupta). Graceful exit.', {
                     userId, numberPhone, name,
+                    error: errProc?.message || String(errProc),
+                    stack: errProc?.stack || null,
+                    path: pathImg,
+                    action: 'image_process_error_graceful',
+                    file: 'media.js'
+                })
+            }
+            if (!responseImage) {
+                // Imagen vacía O error procesando. Respondemos SOFT igual que saveFile.
+                defaultLogger.info('Procesamiento imagen retornó vacío (incluye errores silent). Soft reply.', {
+                    userId, numberPhone, name,
+                    processImageErrorMessage: processImageError?.message || null,
                     action: 'image_process_empty',
                     file: 'media.js'
                 })
+                try {
+                    const softReply = (mediaCaption && String(mediaCaption).trim())
+                        ? `No pude analizar la imagen 😅. Pero leí tu texto: "${String(mediaCaption).trim().slice(0, 120)}". Si me envías el detalle en texto te ayendo inmediatamente.`
+                        : `No pude analizar la imagen 😅. Inténtala nuevamente en JPG/PNG/WebP, o describe en texto lo que necesites.`
+                    try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
+                    try { await provider.sendMessage(numberPhone, softReply, { media: null }) } catch (_) {}
+                } catch (_softErr) { /* no-op */ }
                 await cleanupImageAndPresence(pathImg)
                 return endFlow()
             }

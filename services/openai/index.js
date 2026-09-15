@@ -146,12 +146,33 @@ export async function processTokenUsage(responseOpenAI, availableCredits, userId
 
 
 
-export const runAnalyzeImage = async (base64Image,phone,name) => {
+export const runAnalyzeImage = async (base64Image, phone, name, overrideMime = null) => {
 
     const userId = phone; // Usando el teléfono como userId por consistencia
     const numberPhone = phone;
 
     try {
+        // ============================================================
+        // DETECTAR MIME REAL (webp/jpg/png) sin confiar en nombre de archivo.
+        // GPT-4.1-mini SOPORTA image/webp oficialmente. Si lo mandamos
+        // como image/jpeg cuando en realidad es webp, la API lo rechaza.
+        // Inferimos por magic numbers:
+        //   /9j/ → jpg
+        //   iVBOR → png
+        //   UklGR → webp (RIFF container)
+        // Fallback: image/jpeg (no rompe si overrideMime fue provisto).
+        // ============================================================
+        const detectMimeFromBase64 = (b64) => {
+            const head = String(b64 || '').slice(0, 8);
+            if (head.startsWith('/9j/')) return 'image/jpeg';
+            if (head.startsWith('iVBOR')) return 'image/png';
+            if (head.startsWith('UklGR')) return 'image/webp';
+            return 'image/jpeg';
+        };
+
+        const detectedMime = (overrideMime && /^image\//i.test(overrideMime))
+            ? String(overrideMime).toLowerCase()
+            : detectMimeFromBase64(base64Image);
 
         const availableCredits = await getWhatsappCredit();
         
@@ -160,6 +181,8 @@ export const runAnalyzeImage = async (base64Image,phone,name) => {
             numberPhone,
             name,
             availableCredits,
+            imageDetectedMime: detectedMime,
+            imageBase64Length: String(base64Image || '').length,
             action: 'credit_check',
             file: 'openai/index.js'
         });
@@ -187,7 +210,7 @@ export const runAnalyzeImage = async (base64Image,phone,name) => {
                         },
                         {
                             type: "image_url",
-                            image_url: { url: `data:image/jpeg;base64,${base64Image}` }
+                            image_url: { url: `data:${detectedMime};base64,${base64Image}` }
                         },
                     ],
                 },
