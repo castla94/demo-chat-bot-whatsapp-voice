@@ -24,7 +24,9 @@ import {
     getCurrentVersion,
     consumeLatestPendingOfType,
     waitForMyMessageEntryInBuffer,
-    isRafagaVivaActive
+    isRafagaVivaActive,
+    bumpConversationVersion,
+    registerSyntheticMessage
 } from '../helpers/conversationBuffer.js';
 
 
@@ -799,14 +801,60 @@ export const media = addKeyword(EVENTS.MEDIA)
             }
 
             // ============================================================
-            // GUARD DE RÁFAGA VIVA (evita respuestas duplicadas en imagen).
-            // REGLA NEGOCIO: imagen -> texto/audio DENTRO 45s debe generar
-            // 1 SOLA RESPUESTA UNIFICADA, no 2 separadas.
+            // 🔥 REGLA DE NEGOCIO: IMAGEN NUNCA VA POR CAMINO LEGACY.
+            //    La imagen DEBE esperar el waitForTurn con su ventana dinámica
+            //    de 45s para unificarse con texto/audio que el usuario envíe
+            //    DESPUÉS. Si pasa por legacy (<=0), responde SOLA y luego el
+            //    texto/audio llega aparte generando 2 respuestas.
+            // ============================================================
+            // Si el listener Baileys NUNCA insertó entry en buffer (myEntryId
+            // nulo o flowVersion<=0), CREAMOS una entry SINTÉTICA aquí para
+            // que la imagen entre al mismo ciclo de polling que los demás
+            // flujos y use la misma lógica "último tipo gana".
+            // ============================================================
+            if (Number(flowVersion || 0) <= 0 || !myEntryId) {
+                // Levantamos flowVersion y/o insertamos entry sintética.
+                const bump = bumpConversationVersion(numberPhone) || 0
+                const synVersion = Number(bump && bump.newVersion ? bump.newVersion : (getCurrentVersion(numberPhone) || 1)) || 1
+                const synId = `syn_img_${Date.now()}_${Math.random().toString(36).slice(2,8)}`
+                const captionRaw = String(mediaCaption || '').trim()
+                const combinedContent = combinedText || imageProcessedContent
+                // Mark message synthetic con status READY (ya procesamos la imagen
+                // localmente). Así cumple allReady del consolidador.
+                registerSyntheticMessage(numberPhone, {
+                    id: synId,
+                    messageId: messageId || null,
+                    type: 'image',
+                    content: combinedContent,
+                    caption: captionRaw,
+                    extra: {
+                        imageAnalysisText: ocrTrim,
+                        captionRaw,
+                        combinedText: combinedText || '',
+                        synthetic: true,
+                        sourceFlow: 'media.js_legacy_missing_entry'
+                    }
+                }, { ready: true })
+                flowVersion = synVersion
+                if (!myEntryId) myEntryId = synId
+                defaultLogger.info('Imagen sin entry en buffer: creada entry sintética para coordinar waitForTurn unificado.', {
+                    userId, numberPhone, name,
+                    syntheticEntryId: synId,
+                    syntheticVersion: synVersion,
+                    messageIdProvided: Boolean(messageId),
+                    myEntryId,
+                    combinedTextPreview: combinedText ? String(combinedText).slice(0, 200) : null,
+                    action: 'media_image_synthetic_entry_created_waitforturn',
+                    file: 'media.js'
+                })
+            }
+
+            // ============================================================
+            // GUARD DE RÁFAGA VIVA (redundante pero queda defensivo).
             // ============================================================
             if (Number(flowVersion || 0) <= 0) {
                 const rafagaInfo = isRafagaVivaActive(numberPhone, { file: 'media.js' })
                 if (rafagaInfo && rafagaInfo.active) {
-                    // Forzamos camino coordinado.
                     const newFlowVer = Number(getCurrentVersion(numberPhone) || 1) || 1
                     defaultLogger.info('Media imagen: ráfaga viva detectada. Forzando camino coordinado (no legacy) para unificar en 1 respuesta.', {
                         userId, numberPhone, name,

@@ -1003,9 +1003,79 @@ export const getCurrentVersion = (phone) => {
 export const hasPendingMessages = (phone) => {
     const conv = ensureConversation(phone)
     if (conv.messages.length === 0) return false
-    // FIX LIMBO: solo considera pendientes los tipos SOPORTADOS (text/audio/image).
-    // Un sticker pending no debe considerarse "mensaje pendiente que espera procesamiento".
     return conv.messages.some(m => isValidType(m.type) && m.status === 'pending')
+}
+
+/**
+ * Incrementa versión de la conversación (como si hubiera llegado un mensaje) y
+ * actualiza lastActivityAt a now. Usado cuando un flow necesita insertar una
+ * entry sintética sin pasar por el listener de Baileys (p. ej. imagen que no
+ * tuvo entry insertada por listener y quiere participar del waitForTurn).
+ */
+export const bumpConversationVersion = (phone, { file = 'conversationBuffer.js' } = {}) => {
+    const conv = ensureConversation(phone)
+    conv.version = Number(conv.version || 0) + 1
+    conv.lastActivityAt = Date.now()
+    defaultLogger.debug('Versión conversación bump (manual/sintética).', {
+        phoneKey: conv.key, phone,
+        newVersion: conv.version,
+        newActivityAt: conv.lastActivityAt,
+        action: 'conversation_version_bump_synthetic',
+        file
+    })
+    return { newVersion: conv.version, newActivityAt: conv.lastActivityAt }
+}
+
+/**
+ * Registra una entry sintética (no vino del listener BA) en el buffer.
+ * Permite que flujos que perdieron su entry por race/timeout (ej: la imagen
+ * sin entry que se procesó de forma legacy-esque) participen del ciclo de
+ * coordinación.
+ * - msg: { id, messageId?, type, content?, caption?, extra? }
+ * - opts.ready=true (default false): si true status='ready' else pending.
+ */
+export const registerSyntheticMessage = (phone, msg, opts = {}) => {
+    const conv = ensureConversation(phone)
+    const now = Date.now()
+    const typeNorm = String(msg?.type || 'text').toLowerCase()
+    if (!isValidType(typeNorm)) {
+        defaultLogger.warn('registerSyntheticMessage: tipo no soportado, skip', {
+            phoneKey: conv.key, phone,
+            requestedType: msg?.type,
+            action: 'conversation_synthetic_message_skip_invalid_type',
+            file: opts?.file || 'conversationBuffer.js'
+        })
+        return null
+    }
+    const id = String(msg.id || `syn_${now}_${Math.random().toString(36).slice(2,8)}`)
+    const content = String(msg.content || '').trim()
+    const entry = {
+        id,
+        messageId: msg.messageId || null,
+        type: typeNorm,
+        status: (opts && opts.ready) ? 'ready' : 'pending',
+        receivedAt: Number(msg.receivedAt || now),
+        processedAt: now,
+        version: Number(conv.version || 0),
+        content: content || null,
+        caption: msg.caption ? String(msg.caption).trim() || null : null,
+        extra: Object.assign({}, msg.extra || {}, { synthetic: true })
+    }
+    conv.messages.push(entry)
+    conv.lastActivityAt = now
+    conv.lastReceivedAt = now
+    defaultLogger.info('Entry sintética registrada en buffer para coordinación.', {
+        phoneKey: conv.key, phone,
+        entryId: id,
+        entryType: typeNorm,
+        entryStatus: entry.status,
+        entryVersion: entry.version,
+        contentPreview: content ? content.slice(0, 200) : null,
+        hasCaption: Boolean(entry.caption),
+        action: 'conversation_synthetic_message_registered',
+        file: opts?.file || 'conversationBuffer.js'
+    })
+    return entry
 }
 
 /**
@@ -1362,9 +1432,14 @@ export const waitForTurn = async (phone, {
             const anyPendingMeaningfulCurr = meaningfulMessagesCurr.some(m => m.status === 'pending')
             const allReadyMeaningfulCurr = meaningfulMessagesCurr.length > 0 && !anyPendingMeaningfulCurr
             const silenceCompletedCurr = sinceLastActivity >= silenceWindowMs
-            if (meaningfulMessagesCurr.length > 0 && allReadyMeaningfulCurr && silenceCompletedCurr) {
-                // 🔥 MARCAR TURNO LOCK TAMBIÉN AQUÍ (antes de return)
-                // Para evitar que un 3er flow en mismo tick entre por ORPHAN RESCUE duplicado.
+            // ============================================================
+            // ORPHAN RESCUE: solo si NO somos imagen (la regla de prioridad
+            // último tipo ya debe haber ganado texto/audio). Si soy imagen y
+            // el último tipo NO es imagen, no rescato huérfana (espero al
+            // flujo texto/audio que DEBE responder).
+            // ============================================================
+            const iAmImageButLastIsNot = flowTypeNorm === 'image' && lastMeaningfulType && lastMeaningfulType !== 'image'
+            if (!iAmImageButLastIsNot && meaningfulMessagesCurr.length > 0 && allReadyMeaningfulCurr && silenceCompletedCurr) {
                 conv.turnAcquiredLock = { flowId, flowType: flowTypeNorm, flowVersion, at: now, orphan: true }
                 const combinedInput = buildCombinedInput(phone, { file })
                 defaultLogger.warn('ORPHAN RESCUE: flujo cedido rescata huérfana (lock marcado orphan)', {
@@ -1388,6 +1463,18 @@ export const waitForTurn = async (phone, {
                 return {
                     acquired: true, cancelReason: null,
                     combinedInput, finalVersion: conv.version, orphanRescue: true
+                }
+            }
+            if (iAmImageButLastIsNot && meaningfulMessagesCurr.length > 0 && allReadyMeaningfulCurr && silenceCompletedCurr) {
+                if (!lastLogAt || (now - lastLogAt) > 1500) {
+                    lastLogAt = now
+                    defaultLogger.info('ORPHAN RESCUE SKIP (imagen cede prioridad): último tipo no es imagen, esperamos texto/audio ganador.', {
+                        phoneKey, phone, flowId, flowVersion,
+                        lastType: lastMeaningfulType,
+                        bufferCount: meaningfulMessagesCurr.length,
+                        action: 'conversation_orphan_rescue_skip_image_priority_text_audio',
+                        file
+                    })
                 }
             }
 
@@ -1472,28 +1559,50 @@ export const waitForTurn = async (phone, {
         //   - todos meaningful están ready
         //   - silenceCompleted
         if (meaningfulMessages.length > 0 && allReadyMeaningful && silenceCompleted) {
-            conv.turnAcquiredLock = { flowId, flowType: flowTypeNorm, flowVersion, at: now }
-            const combinedInput = buildCombinedInput(phone, { file })
-            defaultLogger.info('Flujo ADQUIERE turno y construye contexto combinado', {
-                phoneKey, phone,
-                flowType: flowTypeNorm, lastType: lastMeaningfulType,
-                flowId, flowVersion, currentVersion: conv.version,
-                imOwnerOfMyType,
-                ownerVersionForMyType: conv.firstFlowVersionByType?.[flowTypeNorm] || 0,
-                bufferCount: conv.messages.length,
-                meaningfulCount: meaningfulMessages.length,
-                bufferTypes: meaningfulMessages.map(m => m.type),
-                silenceElapsedMs: silenceElapsed,
-                combinedLength: String(combinedInput || '').length,
-                turnLockAcquired: true,
-                aliveFlowsCountNow: conv.aliveFlowsCount,
-                action: 'conversation_turn_acquired',
-                file
-            })
-            decrementAlive()
-            return {
-                acquired: true, cancelReason: null,
-                combinedInput, finalVersion: conv.version
+            // ============================================================
+            // 🔥 REGLA DE NEGOCIO: PRIORIDAD ÚLTIMO TIPO.
+            // Si yo soy IMAGEN, pero el ÚLTIMO mensaje significativo de la ráfaga
+            // es TEXTO o AUDIO (más nuevo que la imagen), YO NO GANO.
+            // El texto/audio es el flujo que debe responder unificado, incluyendo
+            // mi content de imagen (caption+OCR) en el combinedInput.
+            // → Me auto-cedo aunque se cumplieran las 3 condiciones y turn libre.
+            // ============================================================
+            if (flowTypeNorm === 'image' && lastMeaningfulType && lastMeaningfulType !== 'image') {
+                if (!lastLogAt || (now - lastLogAt) > 1500) {
+                    lastLogAt = now
+                    defaultLogger.info('Flujo imagen cede (prioridad último tipo): último mensaje es texto/audio; esperamos que ese flujo gane y unifique.', {
+                        phoneKey, phone, flowId, flowVersion,
+                        lastType: lastMeaningfulType,
+                        bufferCount: meaningfulMessages.length,
+                        action: 'conversation_image_cede_priority_last_type_text_audio',
+                        file
+                    })
+                }
+                // no marcar lock; solo skip. Siguiente tick o el flujo último gana.
+            } else {
+                conv.turnAcquiredLock = { flowId, flowType: flowTypeNorm, flowVersion, at: now }
+                const combinedInput = buildCombinedInput(phone, { file })
+                defaultLogger.info('Flujo ADQUIERE turno y construye contexto combinado', {
+                    phoneKey, phone,
+                    flowType: flowTypeNorm, lastType: lastMeaningfulType,
+                    flowId, flowVersion, currentVersion: conv.version,
+                    imOwnerOfMyType,
+                    ownerVersionForMyType: conv.firstFlowVersionByType?.[flowTypeNorm] || 0,
+                    bufferCount: conv.messages.length,
+                    meaningfulCount: meaningfulMessages.length,
+                    bufferTypes: meaningfulMessages.map(m => m.type),
+                    silenceElapsedMs: silenceElapsed,
+                    combinedLength: String(combinedInput || '').length,
+                    turnLockAcquired: true,
+                    aliveFlowsCountNow: conv.aliveFlowsCount,
+                    action: 'conversation_turn_acquired',
+                    file
+                })
+                decrementAlive()
+                return {
+                    acquired: true, cancelReason: null,
+                    combinedInput, finalVersion: conv.version
+                }
             }
         }
 
