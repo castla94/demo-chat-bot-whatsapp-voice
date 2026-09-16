@@ -1009,6 +1009,47 @@ export const hasPendingMessages = (phone) => {
 }
 
 /**
+ * Detecta si la conversación está en "ráfaga viva": hay múltiples mensajes
+ * válidos (texto/audio/imagen) en buffer, o hay otros tipos mezclados,
+ * o el último mensaje llegó hace poco (<= 45s) y hay más de un mensaje.
+ * Se usa para IMPEDIR que caminos legacy (flowVersion<=0) respondan solos
+ * cuando la regla de negocio exige 1 sola respuesta unificada.
+ */
+export const isRafagaVivaActive = (phone, { file = 'conversationBuffer.js' } = {}) => {
+    const conv = ensureConversation(phone)
+    const meaningful = conv.messages.filter(m => isValidType(m.type))
+    if (meaningful.length === 0) return { active: false }
+    const uniqueTypes = new Set(meaningful.map(m => String(m.type).toLowerCase()))
+    const sinceLast = conv.lastActivityAt ? (Date.now() - Number(conv.lastActivityAt)) : Infinity
+    // RÁFAGA VIVA SI CUMPLE CUALQUIERA:
+    // a) más de 1 mensaje válido
+    // b) más de 1 tipo distinto (texto+imagen, texto+audio, audio+imagen, etc.)
+    // c) (<= 45s desde último mensaje) Y (>=2 mensajes o tipos mixtos)
+    const multiMsg = meaningful.length > 1
+    const mixedTypes = uniqueTypes.size > 1
+    const recentEnough = sinceLast <= SILENCE_IMAGE_MS
+    const active = multiMsg || mixedTypes || (recentEnough && meaningful.length > 1)
+    const detail = {
+        bufferCount: meaningful.length,
+        uniqueTypes: Array.from(uniqueTypes),
+        sinceLastMs: sinceLast,
+        multiMsg,
+        mixedTypes,
+        recentEnough,
+        silenceWindowMs: SILENCE_IMAGE_MS
+    }
+    if (active) {
+        defaultLogger.info('Ráfaga viva detectada: evitaremos legacy directo y usaremos waitForTurn para unificar 1 respuesta.', {
+            phoneKey: conv.key, phone,
+            ...detail,
+            action: 'conversation_rafaga_viva_detected_skip_legacy',
+            file
+        })
+    }
+    return { active, ...detail }
+}
+
+/**
  * Devuelve el ÚLTIMO mensaje de un tipo con status='pending'.
  * Super simple: cuando voice.js termina de transcribir, lo llama para marcar el ÚLTIMO audio pending como ready.
  * No requiere IDs ni nada: el último audio pending en este número es, lógicamente, el que acaba de transcribirse

@@ -24,7 +24,8 @@ import {
     buildCombinedInput,
     getConversationState,
     getCurrentVersion,
-    waitForMyMessageEntryInBuffer
+    waitForMyMessageEntryInBuffer,
+    isRafagaVivaActive
 } from '../helpers/conversationBuffer.js'
 
 // Constantes de configuración
@@ -360,7 +361,39 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 file: 'chatbot.js'
             })
 
-            if (myVersion <= 0) {
+            // ============================================================
+            // GUARD DE RÁFAGA VIVA (evita respuestas duplicadas).
+            // REGLA NEGOCIO: imagen -> texto/audio DENTRO 45s debe generar
+            // 1 SOLA RESPUESTA UNIFICADA, no 2 separadas.
+            // Si isRafagaVivaActive=true (múltiples mensajes/tipos mixtos o
+            // dentro ventana 45s con >1 msg), aunque myVersion<=0 NO usamos
+            // el legacy directo; forzamos camino coordinado con waitForTurn
+            // para esperar y que un flujo adquiera solo 1 turno.
+            // ============================================================
+            let forceCoordinated = false
+            let rafagaInfo = null
+            if (Number(myVersion || 0) <= 0) {
+                rafagaInfo = isRafagaVivaActive(numberPhone, { file: 'chatbot.js' })
+                if (rafagaInfo && rafagaInfo.active) {
+                    forceCoordinated = true
+                    // Levantamos myVersion a 1 (fake) para que entre else (camino coordinado).
+                    myVersion = Number(getCurrentVersion(numberPhone) || 1)
+                    if (!myVersion) myVersion = 1
+                    defaultLogger.info('Chatbot texto: ráfaga viva detectada. Forzando camino coordinado (no legacy) para unificar en 1 respuesta.', {
+                        userId, numberPhone, name,
+                        newCoordinatedVersion: myVersion,
+                        rafagaDetail: {
+                            bufferCount: rafagaInfo.bufferCount,
+                            uniqueTypes: rafagaInfo.uniqueTypes,
+                            sinceLastMs: rafagaInfo.sinceLastMs
+                        },
+                        action: 'chatbot_rafaga_viva_force_coordinated_path',
+                        file: 'chatbot.js'
+                    })
+                }
+            }
+
+            if (Number(myVersion || 0) <= 0) {
                 // ---- LEGACY FALLBACK (sin coordinación) ----
                 userTimeouts[userId] = setTimeout(async () => {
                     const combinedMessages = userBuffers[userId].join(' ')

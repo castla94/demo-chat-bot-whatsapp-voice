@@ -23,7 +23,8 @@ import {
     getConversationState,
     getCurrentVersion,
     consumeLatestPendingOfType,
-    waitForMyMessageEntryInBuffer
+    waitForMyMessageEntryInBuffer,
+    isRafagaVivaActive
 } from '../helpers/conversationBuffer.js';
 
 
@@ -797,7 +798,32 @@ export const media = addKeyword(EVENTS.MEDIA)
                 return endFlow()
             }
 
-            if (flowVersion <= 0) {
+            // ============================================================
+            // GUARD DE RÁFAGA VIVA (evita respuestas duplicadas en imagen).
+            // REGLA NEGOCIO: imagen -> texto/audio DENTRO 45s debe generar
+            // 1 SOLA RESPUESTA UNIFICADA, no 2 separadas.
+            // ============================================================
+            if (Number(flowVersion || 0) <= 0) {
+                const rafagaInfo = isRafagaVivaActive(numberPhone, { file: 'media.js' })
+                if (rafagaInfo && rafagaInfo.active) {
+                    // Forzamos camino coordinado.
+                    const newFlowVer = Number(getCurrentVersion(numberPhone) || 1) || 1
+                    defaultLogger.info('Media imagen: ráfaga viva detectada. Forzando camino coordinado (no legacy) para unificar en 1 respuesta.', {
+                        userId, numberPhone, name,
+                        newCoordinatedVersion: newFlowVer,
+                        rafagaDetail: {
+                            bufferCount: rafagaInfo.bufferCount,
+                            uniqueTypes: rafagaInfo.uniqueTypes,
+                            sinceLastMs: rafagaInfo.sinceLastMs
+                        },
+                        action: 'media_rafaga_viva_force_coordinated_path',
+                        file: 'media.js'
+                    })
+                    flowVersion = newFlowVer
+                }
+            }
+
+            if (Number(flowVersion || 0) <= 0) {
                 // ======== CAMINO LEGACY (sin coordinación) ========
                 // newHistory guarda COMBINEDTEXT como texto user real (no el
                 // prompt interno imageProcessedContent). run() recibe

@@ -27,7 +27,8 @@ import {
     getConversationState,
     getCurrentVersion,
     consumeLatestPendingOfType,
-    waitForMyMessageEntryInBuffer
+    waitForMyMessageEntryInBuffer,
+    isRafagaVivaActive
 } from '../helpers/conversationBuffer.js'
 
 // ============================================================
@@ -368,7 +369,32 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
                 return endFlow()
             }
 
-            if (flowVersion <= 0) {
+            // ============================================================
+            // GUARD DE RÁFAGA VIVA (evita respuestas duplicadas en audio).
+            // REGLA NEGOCIO: imagen -> texto/audio DENTRO 45s debe generar
+            // 1 SOLA RESPUESTA UNIFICADA, no 2 separadas.
+            // ============================================================
+            if (Number(flowVersion || 0) <= 0) {
+                const rafagaInfo = isRafagaVivaActive(numberPhone, { file: 'voice.js' })
+                if (rafagaInfo && rafagaInfo.active) {
+                    // Forzamos camino coordinado.
+                    const newFlowVer = Number(getCurrentVersion(numberPhone) || 1) || 1
+                    defaultLogger.info('Voice audio: ráfaga viva detectada. Forzando camino coordinado (no legacy) para unificar en 1 respuesta.', {
+                        userId, numberPhone, name,
+                        newCoordinatedVersion: newFlowVer,
+                        rafagaDetail: {
+                            bufferCount: rafagaInfo.bufferCount,
+                            uniqueTypes: rafagaInfo.uniqueTypes,
+                            sinceLastMs: rafagaInfo.sinceLastMs
+                        },
+                        action: 'voice_rafaga_viva_force_coordinated_path',
+                        file: 'voice.js'
+                    })
+                    flowVersion = newFlowVer
+                }
+            }
+
+            if (Number(flowVersion || 0) <= 0) {
                 // ====== CAMINO LEGACY (sin coordinación compartida) =====
                 const newHistory = (state.getMyState()?.history ?? []).slice()
                 newHistory.push({ role: 'user', content: transcribedText })
