@@ -23,8 +23,7 @@ import {
     getConversationState,
     getCurrentVersion,
     consumeLatestPendingOfType,
-    waitForMyMessageEntryInBuffer,
-    isImageMessageThrottled
+    waitForMyMessageEntryInBuffer
 } from '../helpers/conversationBuffer.js';
 
 
@@ -83,6 +82,167 @@ const startPresenceKeepAlive = (provider, jid, { presenceType = 'composing', fil
         } catch (_) {}
     }
     return { stop }
+}
+
+// ============================================================
+// MENSAJE GENÉRICO FIJO: cuando NO se puede descargar/procesar imagen.
+// Texto EXACTO requerido por negocio:
+//   "Disculpa, no logré descargar la imagen 😔. ¿Puedes enviármela nuevamente?"
+// ============================================================
+const IMAGE_DOWNLOAD_ERROR_MSG = 'Disculpa, no logré descargar la imagen 😔. ¿Puedes enviármela nuevamente?'
+
+// ============================================================
+// Helper: ENVÍA SEGURO (chunks, numberPhone largo gswa usa flowDynamic).
+// ============================================================
+const sendReplySafe = async (numberPhone, provider, flowDynamic, text) => {
+    try {
+        if (!text || !String(text).trim()) return
+        if (String(numberPhone || '').length <= 11) {
+            await provider.sendMessage(numberPhone, text, { media: null })
+        } else {
+            await flowDynamic(text)
+        }
+    } catch (err) {
+        defaultLogger.debug('sendReplySafe error silencioso', {
+            numberPhone, length: String(text || '').length,
+            error: err?.message || String(err),
+            action: 'image_send_reply_safe_swallowed', file: 'media.js'
+        })
+    }
+}
+
+// ============================================================
+// Helper: procesar caption solo como TEXTO (sin imagen).
+// Usado cuando:
+//   - imagen throttled PERO tiene caption (NO SILENCIAR caption).
+//   - imagen no se pudo descargar Y tiene caption.
+//   - imagen corrupta Y tiene caption.
+//
+// Flujo interno:
+//   1. Cargar historial (igual que chatbot).
+//   2. Lanzar run(caption).
+//   3. Enviar respuesta + actualizar historial + limpiar presence safe.
+//
+// Nota: NO toca waitForTurn/coordinación. Va por LEGACY directo (como
+// chatbot fallback myVersion<=0). Así no espera polling innecesario.
+// El usuario SIEMPRE recibe respuesta a su caption.
+// Retorna: listo para hacer return endFlow() desde afuera.
+// ============================================================
+const runCaptionOnlyAsText = async ({
+    captionRaw, ctx, numberPhone, userId, name, provider, flowDynamic, state,
+    presence
+}) => {
+    const caption = String(captionRaw || '').trim()
+    if (!caption) {
+        defaultLogger.debug('runCaptionOnlyAsText llamado sin caption. No-op.', {
+            userId, numberPhone,
+            action: 'image_caption_only_empty_skip', file: 'media.js'
+        })
+        return
+    }
+    defaultLogger.info('Imagen omitida → procesando caption como TEXTO puro (LEGACY directo).', {
+        userId, numberPhone, name,
+        captionLength: caption.length,
+        captionPreview: caption.slice(0, 120),
+        action: 'image_caption_only_run_start',
+        file: 'media.js'
+    })
+    // Presence keep-alive si existe el objeto (los caminos de saveFile / throttle
+    // post-L418 ya lo crearon; el camino throttle temprano no lo tiene).
+    if (!presence) {
+        try {
+            if (provider?.vendor?.sendPresenceUpdate && ctx?.key?.remoteJid) {
+                await provider.vendor.sendPresenceUpdate('composing', ctx.key.remoteJid).catch(() => {})
+            }
+        } catch (_) {}
+    }
+    const stopPresenceSafeCaption = async () => {
+        try { await new Promise(resolve => setTimeout(resolve, 3000)) } catch (_) {}
+        try {
+            if (presence && typeof presence.stop === 'function') await presence.stop().catch(() => {})
+            else if (provider?.vendor?.sendPresenceUpdate && ctx?.key?.remoteJid) {
+                await provider.vendor.sendPresenceUpdate('paused', ctx.key.remoteJid).catch(() => {})
+            }
+        } catch (_) {}
+    }
+    try {
+        // Pre-cargar historial igual que chatbot/legacy.
+        const stBefore = state.getMyState() || {}
+        const historyBefore = Array.isArray(stBefore.history) ? stBefore.history.slice() : []
+        let historyForRun = historyBefore
+        if (historyForRun.length === 0) {
+            try {
+                const dbHistory = await getWhatsappConversation(numberPhone)
+                if (Array.isArray(dbHistory) && dbHistory.length > 0) {
+                    historyForRun = dbHistory.slice()
+                    await state.update({ ...stBefore, history: historyForRun }).catch(() => {})
+                    defaultLogger.info('Caption-only: historial cargado desde DB', {
+                        userId, numberPhone, name, len: historyForRun.length,
+                        action: 'image_caption_only_history_loaded', file: 'media.js'
+                    })
+                }
+            } catch (_dbErr) { /* no-op: usar [] */ }
+        }
+        const userContent = `El usuario envió una imagen que no fue procesada. Su texto (caption) es: "${caption}". Responde directamente a este texto como si fuera un mensaje normal.`
+        const newHistory = historyForRun.slice()
+        newHistory.push({ role: 'user', content: userContent })
+        defaultLogger.info('Caption-only: inicio llamada IA run(caption)', {
+            userId, numberPhone, name,
+            historyLength: newHistory.length,
+            action: 'image_caption_only_ia_start',
+            file: 'media.js'
+        })
+        const response = await run(name, newHistory, userContent, numberPhone, null)
+        defaultLogger.info('Caption-only: Respuesta del modelo obtenida. ENVIAR SIN INVALIDAR.', {
+            userId, numberPhone, name,
+            modelResponseLen: String(response || '').length,
+            action: 'image_caption_only_model_response',
+            file: 'media.js'
+        })
+
+        // Marcar leído (solo aquí, cuando está confirmada la respuesta IA).
+        try { if (ctx && ctx.key) await provider.vendor.readMessages([ctx.key]).catch(() => {}) } catch (_) {}
+
+        // Enviar respuesta + guardar en historial + alarma IA.
+        const alarmResp = await processAlarm(ctx, numberPhone, name, provider, response, "IA")
+            .catch(() => false)
+        if (alarmResp) {
+            await stopPresenceSafeCaption()
+            return
+        }
+        await sendReplySafe(numberPhone, provider, flowDynamic, response)
+        const finalHistory = newHistory.slice()
+        finalHistory.push({ role: 'assistant', content: String(response || '') })
+        if (finalHistory.length > 20) finalHistory.splice(0, 2)
+        await state.update({ history: finalHistory }).catch(() => {})
+        try {
+            await postWhatsappConversation(numberPhone, [
+                { role: 'user', content: caption, role_type: 'user' },
+                { role: 'assistant', content: String(response || ''), role_type: 'assistant' }
+            ]).catch(() => {})
+        } catch (_) {}
+        defaultLogger.info('Caption-only: respuesta enviada y limpio terminado.', {
+            userId, numberPhone, name,
+            responseLen: String(response || '').length,
+            action: 'image_caption_only_done',
+            file: 'media.js'
+        })
+    } catch (errCaption) {
+        defaultLogger.error('Caption-only: error interno. Enviar fallback simple.', {
+            userId, numberPhone, name,
+            captionPreview: caption.slice(0, 120),
+            error: errCaption?.message || String(errCaption),
+            stack: errCaption?.stack || null,
+            action: 'image_caption_only_runtime_error',
+            file: 'media.js'
+        })
+        // Fallback simple: no dejar al usuario en SILENCIO TOTAL.
+        const simpleFallback = 'Vi tu mensaje pero no pude generar respuesta en este momento 😔. Inténtalo en instantes o describe en texto lo que necesites.'
+        try { if (ctx && ctx.key) await provider.vendor.readMessages([ctx.key]).catch(() => {}) } catch (_) {}
+        await sendReplySafe(numberPhone, provider, flowDynamic, simpleFallback)
+    } finally {
+        await stopPresenceSafeCaption()
+    }
 }
 
 
@@ -214,24 +374,19 @@ export const media = addKeyword(EVENTS.MEDIA)
         const name = ctx?.pushName ?? ''
         const mediaCaption = extractMediaCaption(ctx)
         const messageId = ctx?.key?.id || null
+        // SCOPE GENERAL: hasCaptionNow lo usan TODOS los branches de error
+        // (throttle temprano, saveFile, processImage, catch final, etc.)
+        // para NO SILENCIAR al usuario cuando escribió texto con la imagen.
+        const hasCaptionNow = Boolean(mediaCaption && String(mediaCaption).trim())
 
         try {
-            // ================ THROTTLING TEMPRANO DE IMÁGENES ================
-            // Si esta imagen específica fue rechazada por throttling (< 20s desde
-            // la última aceptada), salir inmediatamente sin setup, sin logs pesados,
-            // sin esperar polling ni nada.
-            const throttleCheck = isImageMessageThrottled(numberPhone, messageId, { file: 'media.js' })
-            if (throttleCheck.throttled) {
-                defaultLogger.info('Flujo imagen terminado inmediatamente: throttled (20s)', {
-                    userId, numberPhone, name, messageId,
-                    waitRemainingMs: throttleCheck.waitMs,
-                    mediaCaption: String(mediaCaption || '').slice(0, 100),
-                    action: 'media_flow_end_throttled_early',
-                    file: 'media.js'
-                })
-                return endFlow()
-            }
-            // ==================================================================
+            defaultLogger.info('Flujo imagen: procesando (sin throttle). Iniciando setup normal.', {
+                userId, numberPhone, name, messageId,
+                hasCaption: hasCaptionNow,
+                mediaCaption: hasCaptionNow ? String(mediaCaption).slice(0, 100) : '',
+                action: 'media_flow_start_no_throttle',
+                file: 'media.js'
+            })
 
             const { profilePictureUrl } = await getProfilePictureInfo(ctx, provider, {
                 userId, numberPhone, name, file: 'media.js'
@@ -436,30 +591,27 @@ export const media = addKeyword(EVENTS.MEDIA)
 
             // ============================================================
             // PATH RÁPIDO: si el saveFile falló (webp corrupto, error sharp
-            // pre-save, path sin permisos, etc.) — respondemos SOFT y salimos.
+            // pre-save, path sin permisos, etc.)
+            // 🟢 SI HAY CAPTION → NO SILENCIAR. Enviar mensaje genérico
+            //    IMAGE_DOWNLOAD_ERROR_MSG + luego responder el caption con IA.
+            // 🔴 SÓLO mensaje genérico si la imagen venía SIN caption.
             // ============================================================
             if (saveImageError || !pathImg) {
+                try { await provider.vendor.readMessages([ctx.key]).catch(() => {}) } catch (_) {}
                 try {
-                    const softReply = (mediaCaption && String(mediaCaption).trim())
-                        ? `No pude procesar la imagen que enviaste 😅. Pero vi tu texto: "${String(mediaCaption).trim().slice(0, 120)}". Puedes volver a enviar la imagen en JPG/PNG/WebP si lo necesitas.`
-                        : `No pude procesar la imagen que enviaste 😅. Inténtala nuevamente en JPG/PNG/WebP, o describe en texto lo que necesites.`
-                    try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
-                    try {
-                        await provider.sendMessage(numberPhone, softReply, { media: null })
-                    } catch (_sendErr) {}
-                    defaultLogger.warn('Imagen no guardada → soft reply enviado (flujo termina GRACEFUL).', {
-                        userId, numberPhone, name,
-                        hasCaption: Boolean(mediaCaption && String(mediaCaption).trim()),
-                        saveImageErrorMessage: saveImageError?.message || null,
-                        action: 'image_savefile_error_soft_reply',
-                        file: 'media.js'
-                    })
-                } catch (_softErr) {
-                    defaultLogger.debug('Error enviando soft reply de imagen no procesada', {
-                        userId, numberPhone, name,
-                        error: _softErr?.message || String(_softErr),
-                        action: 'image_soft_reply_error_swallowed',
-                        file: 'media.js'
+                    await sendReplySafe(numberPhone, provider, flowDynamic, IMAGE_DOWNLOAD_ERROR_MSG)
+                } catch (_) {}
+                defaultLogger.warn('saveFile falló o pathImg vacío. Soft reply genérico enviado.', {
+                    userId, numberPhone, name,
+                    hasCaption: hasCaptionNow,
+                    saveImageErrorMessage: saveImageError?.message || null,
+                    action: 'image_savefile_error_generic_reply',
+                    file: 'media.js'
+                })
+                if (hasCaptionNow) {
+                    await runCaptionOnlyAsText({
+                        captionRaw: mediaCaption, ctx, numberPhone, userId, name,
+                        provider, flowDynamic, state, presence
                     })
                 }
                 await cleanupImageAndPresence(null)
@@ -489,20 +641,26 @@ export const media = addKeyword(EVENTS.MEDIA)
                 })
             }
             if (!responseImage) {
-                // Imagen vacía O error procesando. Respondemos SOFT igual que saveFile.
-                defaultLogger.info('Procesamiento imagen retornó vacío (incluye errores silent). Soft reply.', {
+                // Imagen vacía O error procesando.
+                // 🟢 SI HAY CAPTION: mensaje genérico + responder caption con IA.
+                // 🔴 SIN CAPTION: solo mensaje genérico.
+                defaultLogger.info('Procesamiento imagen retornó vacío / error (incluye errores silent).', {
                     userId, numberPhone, name,
                     processImageErrorMessage: processImageError?.message || null,
-                    action: 'image_process_empty',
+                    hasCaption: hasCaptionNow,
+                    action: 'image_process_empty_or_error',
                     file: 'media.js'
                 })
+                try { await provider.vendor.readMessages([ctx.key]).catch(() => {}) } catch (_) {}
                 try {
-                    const softReply = (mediaCaption && String(mediaCaption).trim())
-                        ? `No pude analizar la imagen 😅. Pero leí tu texto: "${String(mediaCaption).trim().slice(0, 120)}". Si me envías el detalle en texto te ayendo inmediatamente.`
-                        : `No pude analizar la imagen 😅. Inténtala nuevamente en JPG/PNG/WebP, o describe en texto lo que necesites.`
-                    try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
-                    try { await provider.sendMessage(numberPhone, softReply, { media: null }) } catch (_) {}
-                } catch (_softErr) { /* no-op */ }
+                    await sendReplySafe(numberPhone, provider, flowDynamic, IMAGE_DOWNLOAD_ERROR_MSG)
+                } catch (_) {}
+                if (hasCaptionNow) {
+                    await runCaptionOnlyAsText({
+                        captionRaw: mediaCaption, ctx, numberPhone, userId, name,
+                        provider, flowDynamic, state, presence
+                    })
+                }
                 await cleanupImageAndPresence(pathImg)
                 return endFlow()
             }
@@ -647,13 +805,35 @@ export const media = addKeyword(EVENTS.MEDIA)
             return endFlow()
 
         } catch (error) {
-            defaultLogger.error('Error en flujo de medios (único addAction)', {
+            defaultLogger.error('Error en flujo de medios (único addAction) → Respuesta SUAVE no silencio.', {
                 userId, numberPhone, name,
                 error: error.message,
                 stack: error.stack,
                 context: ctx,
+                hasCaption: hasCaptionNow,
+                action: 'media_flow_trycatch_generic_error',
                 file: 'media.js'
             })
+            // 🟢 SIEMPRE responder algo. No dejar usuario en SILENCIO.
+            try {
+                try { if (ctx && ctx.key) await provider.vendor.readMessages([ctx.key]).catch(() => {}) } catch (_) {}
+                try {
+                    await sendReplySafe(numberPhone, provider, flowDynamic, IMAGE_DOWNLOAD_ERROR_MSG)
+                } catch (_) {}
+                if (hasCaptionNow) {
+                    await runCaptionOnlyAsText({
+                        captionRaw: mediaCaption, ctx, numberPhone, userId, name,
+                        provider, flowDynamic, state, presence: null
+                    })
+                }
+            } catch (_superFinal) {
+                defaultLogger.debug('Catch final generic media: super error enviando replies. SILENCIO evitable, logueado.', {
+                    userId, numberPhone,
+                    error: _superFinal?.message || String(_superFinal),
+                    action: 'media_flow_generic_catch_final_reply_error',
+                    file: 'media.js'
+                })
+            }
             return endFlow()
         } finally {
             try {

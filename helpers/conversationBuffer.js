@@ -229,8 +229,13 @@ const ensureConversation = (phone) => {
             // ============================================================
             // lastImageAcceptedAt: timestamp de la ÚLTIMA imagen ACEPTADA
             // (no rechazada por throttle). Usado por IMAGE_THROTTLE_MS.
+            // lastImageAcceptedMessageId: messageId de esa ÚLTIMA imagen
+            // aceptada. isImageMessageThrottled() lo usa para NO matar
+            // por accidente a la MISMA imagen que se acaba de aceptar
+            // (race condition fallback global de ventana de 20s).
             // ============================================================
             lastImageAcceptedAt: 0,
+            lastImageAcceptedMessageId: null,
             // ============================================================
             // throttledImageMessageIds: lista de messageIds de imágenes
             // que fueron RECHAZADAS por throttling (con TTL de 30s).
@@ -542,29 +547,6 @@ export const addReceivedMessage = (phone, {
         return null
     }
 
-    // ============================================================
-    // THROTTLING DE IMÁGENES: antes de insertar, chequear ventana.
-    // Si está dentro de 20s desde la última imagen aceptada →
-    // → ignorar completamente (no incrementa version, no entra).
-    // ============================================================
-    if (typeNorm === 'image') {
-        const throttleResult = checkAndSetImageThrottle(phone, {
-            file,
-            setOnAllow: true,
-            messageId: messageId || null,
-            extraLog: {
-                stage: 'addReceivedMessage_pre_insert',
-                caption: String(caption || '').slice(0, 80),
-                contentPreview: String(content || '').slice(0, 80)
-            }
-        })
-        if (!throttleResult.allowed) {
-            // Retornar null: igual que los tipos no soportados.
-            // NO incrementa version, NO entra al buffer, NO hace nada.
-            return null
-        }
-    }
-
     const conv = ensureConversation(phone)
     const id = String(messageId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
 
@@ -843,6 +825,9 @@ export const checkAndSetImageThrottle = (phone, {
 
     if (setOnAllow) {
         conv.lastImageAcceptedAt = now
+        if (messageId && String(messageId).trim()) {
+            conv.lastImageAcceptedMessageId = String(messageId).trim()
+        }
     }
     defaultLogger.info('Image throttle PERMITIDO: aceptando imagen', {
         phoneKey, phone,
@@ -861,7 +846,25 @@ export const checkAndSetImageThrottle = (phone, {
 // ============================================================
 // Helper para media.js: detecta rápidamente si un messageId
 // específico fue rechazado por throttling de imágenes.
-// Retorna { throttled: boolean, waitMs: number }
+// Retorna { throttled: boolean, waitMs: number, reason: string }
+//
+// ⚠️ IMPORTANTE (BUG FIX): esta función NO debe matar a la IMAGEN
+// QUE SÍ FUE ACEPTADA (la primera en la ventana de 20s).
+// La fuente de verdad del throttling es checkAndSetImageThrottle()
+// ejecutado en el listener Baileys, quien decide allowed=true/false
+// y REGISTRA explícitamente cada messageId:
+//   - Si fue RECHAZADA → entra a throttledImageMessageIds
+//   - Si fue ACEPTADA → entra a lastImageAcceptedMessageId
+//
+// Por lo tanto, acá las reglas son:
+//   A) Si targetId existe → SÓLO bloquear SI ESTÁ REGISTRADO EN
+//      throttledImageMessageIds (bloqueo EXPLÍCITO). NUNCA usar
+//      "ventana global de 20s" como fallback cuando messageId
+//      está presente, porque eso mataría a la imagen aceptada.
+//   B) Si targetId NO existe (null/undefined/vacío, caso raro) →
+//      recién ahí usar el fallback de ventana.
+//   C) Excepción extra: si targetId === lastImageAcceptedMessageId
+//      → es la MISMA imagen que fue aceptada → NO THROTTLED JAMÁS.
 // ============================================================
 export const isImageMessageThrottled = (phone, messageId, {
     file = 'conversationBuffer.js'
@@ -878,48 +881,90 @@ export const isImageMessageThrottled = (phone, messageId, {
         )
     }
 
+    const lastAcceptedId = conv.lastImageAcceptedMessageId
+        ? String(conv.lastImageAcceptedMessageId).trim()
+        : null
+
+    // ============================================================
+    // 🔥 EXCEPCIÓN PRIORIDAD 0:
+    //    si este messageId es la MISMA imagen que fue ACEPTADA
+    //    (el listener checkAndSetImageThrottle marcó allowed=true)
+    //    → NO THROTTLED. Nunca matar a la propia imagen aceptada.
+    // ============================================================
+    if (targetId && lastAcceptedId && targetId === lastAcceptedId) {
+        defaultLogger.debug('isImageMessageThrottled: SKIP. messageId = lastImageAcceptedMessageId (imagen permitida)', {
+            phoneKey, phone,
+            messageId: targetId,
+            lastImageAcceptedAt: conv.lastImageAcceptedAt
+                ? new Date(Number(conv.lastImageAcceptedAt || 0)).toISOString()
+                : null,
+            action: 'image_throttle_skip_own_accepted_image',
+            file
+        })
+        return { throttled: false, waitMs: 0, reason: 'own_accepted_image' }
+    }
+
+    // ============================================================
+    // 1) Chequeo EXPLÍCITO: por id registrado en throttledImageMessageIds.
+    //    Este es el único camino BLOQUEANTE cuando messageId existe.
+    // ============================================================
     if (targetId && Array.isArray(conv.throttledImageMessageIds)) {
         const found = conv.throttledImageMessageIds.find(e => e.id === targetId)
         if (found) {
             const remaining = Math.max(0, Number(found.expiresAt || 0) - now)
-            defaultLogger.info('isImageMessageThrottled: messageId encontrado en lista de throttled', {
+            defaultLogger.info('isImageMessageThrottled: messageId encontrado en lista de throttled (bloqueo explícito)', {
                 phoneKey, phone,
                 messageId: targetId,
                 remainingMs: remaining,
                 action: 'image_throttle_id_check_hit',
                 file
             })
-            return { throttled: true, waitMs: remaining }
+            return { throttled: true, waitMs: remaining, reason: 'explicit_id_in_throttled_list' }
         }
     }
 
-    // Fallback: si no está en la lista, chequear la ventana global
+    // ============================================================
+    // 2) FALLBACK: solo se activa SI NO HAY messageId (raro).
+    //    Con messageId presente, jamás bloquear por fallback global
+    //    (evitamos matar a la imagen aceptada por race listener / BBot).
+    // ============================================================
     const lastAcceptedAt = Number(conv.lastImageAcceptedAt || 0)
-    if (lastAcceptedAt > 0) {
+    if (!targetId && lastAcceptedAt > 0) {
         const elapsed = now - lastAcceptedAt
         if (elapsed < IMAGE_THROTTLE_MS) {
             const remaining = Math.max(0, IMAGE_THROTTLE_MS - elapsed)
-            defaultLogger.info('isImageMessageThrottled: dentro de ventana global throttle (fallback)', {
+            defaultLogger.info('isImageMessageThrottled: fallback global throttle (SIN messageId)', {
                 phoneKey, phone,
-                messageId: targetId,
+                messageId: null,
                 lastImageAcceptedAt: new Date(lastAcceptedAt).toISOString(),
                 elapsedSinceLastAcceptedMs: elapsed,
                 remainingMs: remaining,
-                action: 'image_throttle_global_check_hit',
+                action: 'image_throttle_global_check_hit_only_no_id',
                 file
             })
-            return { throttled: true, waitMs: remaining }
+            return { throttled: true, waitMs: remaining, reason: 'global_window_fallback_no_id' }
         }
     }
 
+    // ============================================================
+    // 3) LLEGÓ HASTA ACÁ = NO THROTTLED.
+    //    Casos:
+    //      - messageId presente y NO está en throttledList (libre).
+    //      - messageId presente y es la aceptada.
+    //      - sin messageId y venció ventana.
+    // ============================================================
     defaultLogger.debug('isImageMessageThrottled: NO throttled', {
         phoneKey, phone,
-        messageId: targetId,
-        lastImageAcceptedAt: lastAcceptedAt ? new Date(lastAcceptedAt).toISOString() : null,
+        messageId: targetId || null,
+        hasMessageId: Boolean(targetId),
+        lastImageAcceptedMessageId: lastAcceptedId || null,
+        lastImageAcceptedAt: lastAcceptedAt
+            ? new Date(lastAcceptedAt).toISOString()
+            : null,
         action: 'image_throttle_check_miss',
         file
     })
-    return { throttled: false, waitMs: 0 }
+    return { throttled: false, waitMs: 0, reason: targetId ? 'not_in_throttled_list' : 'window_expired_or_empty' }
 }
 
 // ============================================================
