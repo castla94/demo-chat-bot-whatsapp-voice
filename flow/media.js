@@ -339,24 +339,58 @@ function extractNumber(ctx) {
 }
 
 function extractMediaCaption(ctx) {
+    // ============================================================
+    // NOTA IMPORTANTE sobre orden de candidatos:
+    // En BuilderBot EVENTS.MEDIA, ctx.body NO es el caption; contiene
+    // el nombre del evento interno tipo "_event_media__UUID". Si lo
+    // ponemos primero, captura MAL el texto como nombre del evento.
+    //
+    // Orden CORRECTO (de más específico a más genérico):
+    //   1. imageMessage.caption / videoMessage.caption / documentMessage.caption
+    //      (estos provienen DIRECTAMENTE de WhatsApp/Baileys y son el
+    //      caption real del usuario que acompañó al medio enviado).
+    //   2. ctx.caption / ctx.msg.caption (BuilderBot alias conveniente,
+    //      cuando existe es el caption extraído).
+    //   3. extendedTextMessage.text (cuando el media trae texto extra
+    //      embeddeado; caso poco común pero posible).
+    //   4. ctx.body / ctx.msg.body (ÚLTIMO. Solo usar si no hubo nada
+    //      más y no se trata de un nombre de evento UUID).
+    // ============================================================
     const candidates = [
-        ctx?.body,
-        ctx?.caption,
         ctx?.message?.imageMessage?.caption,
-        ctx?.message?.videoMessage?.caption,
-        ctx?.message?.extendedTextMessage?.text,
-        ctx?.msg?.caption,
-        ctx?.msg?.body,
-        ctx?.msg?.imageMessage?.caption,
         ctx?.msg?.message?.imageMessage?.caption,
-        ctx?.message?.documentMessage?.caption
+        ctx?.msg?.imageMessage?.caption,
+        ctx?.message?.videoMessage?.caption,
+        ctx?.msg?.message?.videoMessage?.caption,
+        ctx?.msg?.videoMessage?.caption,
+        ctx?.message?.documentMessage?.caption,
+        ctx?.msg?.message?.documentMessage?.caption,
+        ctx?.msg?.documentMessage?.caption,
+        ctx?.caption,
+        ctx?.msg?.caption,
+        ctx?.message?.extendedTextMessage?.text,
+        ctx?.msg?.extendedTextMessage?.text,
+        ctx?.msg?.message?.extendedTextMessage?.text,
+        ctx?.body,
+        ctx?.msg?.body
     ];
 
     for (const candidate of candidates) {
         const value = String(candidate || '').trim();
-        if (value) {
-            return value;
+        if (!value) continue;
+        // Protección anti-nombre-de-evento BuilderBot: CUALQUIER string que
+        // empiece por "_event_" se considera nombre interno del evento
+        // (p. ej. "_event_media__UUID", "_event_voice__xxx",
+        //  "_event_document__corto", etc.). NUNCA se toma como caption.
+        if (value.startsWith('_event_')) {
+            continue;
         }
+        // Segunda capa defensiva: match exacto de UUID completo con guiones
+        // por si alguien cambiara el prefijo.
+        if (/^_event_[a-z0-9]+__[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+            continue;
+        }
+        return value;
     }
 
     return '';
@@ -671,15 +705,51 @@ export const media = addKeyword(EVENTS.MEDIA)
                 file: 'media.js'
             })
 
+            // ============================================================
+            // UNIR CAPTION (texto usuario) + TEXTO OBTENIDO DE LA IMAGEN
+            // ============================================================
+            // - Prioridad: el caption del usuario es la fuente principal
+            //   (lo que el usuario quiso decir explícitamente).
+            // - El OCR / análisis de la imagen es apoyo contextual.
+            // - La unión se guarda en 3 sitios:
+            //     (a) combinedText variable local
+            //     (b) responseImage.text → para uso downstream y logs
+            //     (c) entry content al marcar READY en buffer
+            // ============================================================
+            const captionTrim = String(mediaCaption || '').trim()
+            const ocrTrim = String(responseImage.text || '').trim()
+            let combinedText = ''
+            if (captionTrim && ocrTrim) {
+                combinedText = `${captionTrim}\n\n[Contenido detectado en la imagen: ${ocrTrim}]`
+            } else if (captionTrim) {
+                combinedText = captionTrim
+            } else if (ocrTrim) {
+                combinedText = ocrTrim
+            }
+            if (combinedText) {
+                responseImage.text = combinedText
+                defaultLogger.info('Texto combinado (caption + imagen) generado', {
+                    userId, numberPhone, name,
+                    captionRaw: captionTrim ? captionTrim.slice(0, 150) : '',
+                    ocrRaw: ocrTrim ? ocrTrim.slice(0, 150) : '',
+                    combinedText: combinedText.slice(0, 300),
+                    action: 'image_caption_ocr_combined_ok',
+                    file: 'media.js'
+                })
+            }
+
             // ================ COORDINACIÓN COMPARTIDA: MARCAR IMAGEN READY ================
             const imageQuestionParts = [];
-            if (mediaCaption) {
-                imageQuestionParts.push(`El usuario envio esta imagen con el siguiente texto o caption: "${mediaCaption}".`);
+            if (captionTrim) {
+                imageQuestionParts.push(`El usuario envio esta imagen con el siguiente texto o caption: "${captionTrim}".`);
             }
-            if (responseImage?.text) {
-                imageQuestionParts.push(`Contenido detectado en la imagen: *${responseImage.text}*.`);
+            if (ocrTrim) {
+                imageQuestionParts.push(`Contenido detectado en la imagen: *${ocrTrim}*.`);
             }
-            imageQuestionParts.push('IMPORTANTE: usa el caption del usuario como contexto principal y la imagen como apoyo para responder.');
+            if (combinedText) {
+                imageQuestionParts.push(`TEXTO UNIFICADO que representa el mensaje completo del usuario: "${combinedText}".`);
+            }
+            imageQuestionParts.push('IMPORTANTE: usa el caption del usuario como contexto principal, el texto extraído de la imagen como apoyo, y prioriza el TEXTO UNIFICADO cuando corresponda para responder.');
             const imageProcessedContent = imageQuestionParts.join('\n\n');
 
             const st = state.getMyState() || {}
@@ -702,10 +772,19 @@ export const media = addKeyword(EVENTS.MEDIA)
                 file: 'media.js'
             })
             if (flowVersion > 0 && myEntryId) {
+                // content que almacenamos en la buffer entry: es el texto
+                // COMBINADO REAL (caption + OCR). Esto asegura que cuando
+                // consolidateRafagaForTurn construya combinedInput uniéndolo
+                // con mensajes de texto anteriores, aparezca la unión real.
+                // imageProcessedContent se usa solo como prompt interno de IA.
                 markMessageReady(numberPhone, myEntryId, {
-                    content: imageProcessedContent,
-                    caption: mediaCaption,
-                    extra: { imageAnalysisText: responseImage?.text || '' },
+                    content: combinedText || imageProcessedContent,
+                    caption: captionTrim,
+                    extra: {
+                        imageAnalysisText: ocrTrim,
+                        captionRaw: captionTrim,
+                        combinedText
+                    },
                     file: 'media.js'
                 })
             }
@@ -720,19 +799,24 @@ export const media = addKeyword(EVENTS.MEDIA)
 
             if (flowVersion <= 0) {
                 // ======== CAMINO LEGACY (sin coordinación) ========
+                // newHistory guarda COMBINEDTEXT como texto user real (no el
+                // prompt interno imageProcessedContent). run() recibe
+                // imageProcessedContent como prompt guía (incluye hints de
+                // prioridad caption + OCR).
                 const newHistory = (state.getMyState()?.history ?? []).slice()
-                newHistory.push({ role: 'user', content: imageProcessedContent })
+                newHistory.push({ role: 'user', content: combinedText || imageProcessedContent })
                 const response = await run(name, newHistory, imageProcessedContent, numberPhone, responseImage.img)
                 defaultLogger.info('Respuesta del modelo obtenida Texto Imagen (legacy). FLUJO COMPROMETIDO: NO INVALIDAR POR NADA', {
                     userId, numberPhone, name,
                     modelResponse: response,
                     action: 'model_response_legacy',
+                    combinedTextPreview: combinedText ? combinedText.slice(0, 300) : null,
                     note: 'DESPUÉS DE ESTE PUNTO, SIN 2ª VALIDACIÓN, SE RESPONDE OBLIGATORIAMENTE',
                     file: 'media.js'
                 })
                 await respondAndFinalize({
                     response,
-                    combinedMessages: imageProcessedContent,
+                    combinedMessages: combinedText || imageProcessedContent,
                     image: responseImage,
                     name, numberPhone, userId, ctx, provider, flowDynamic, state, pathImg
                 })
@@ -760,7 +844,12 @@ export const media = addKeyword(EVENTS.MEDIA)
                 return endFlow()
             }
 
-            const combinedInput = turn.combinedInput || imageProcessedContent
+            // El CONSOLIDADOR (consolidateRafagaForTurn) ya unió entries de
+            // tipo texto/audio/imagen con sus content REALES guardados en
+            // markMessageReady (combinedText para la imagen). Si el turn
+            // tiene combinedInput, lo usamos tal cual (ya trae la unión
+            // real ráfaga). Si no, fallback a combinedText.
+            const combinedInput = turn.combinedInput || combinedText || imageProcessedContent
             const newHistory = (state.getMyState()?.history ?? []).slice()
             newHistory.push({ role: 'user', content: combinedInput })
 
@@ -768,6 +857,7 @@ export const media = addKeyword(EVENTS.MEDIA)
                 userId, numberPhone, name,
                 flowVersion,
                 combinedLength: String(combinedInput).length,
+                combinedPreview: String(combinedInput).slice(0, 300),
                 historyLength: newHistory.length,
                 action: 'processing_messages_shared_image',
                 file: 'media.js'
@@ -780,7 +870,7 @@ export const media = addKeyword(EVENTS.MEDIA)
                 action: 'conversation_ai_request_start',
                 file: 'media.js'
             })
-            const response = await run(name, newHistory, combinedInput, numberPhone, responseImage.img)
+            const response = await run(name, newHistory, imageProcessedContent, numberPhone, responseImage.img)
             defaultLogger.info('Respuesta del modelo obtenida (imagen, coordinado). FLUJO COMPROMETIDO: NO INVALIDAR POR NADA, RESPONDER SIEMPRE', {
                 userId, numberPhone, name,
                 flowVersion,
