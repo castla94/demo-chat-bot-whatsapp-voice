@@ -557,10 +557,6 @@ const respondAndFinalize = async (response, combinedMessages, name, numberPhone,
         return { duplicated: true }
     }
 
-    // Alarm IA
-    const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, response, "IA")
-    if (shouldEndFlow) return { alarm: true }
-
     // Procesar orden "datos recibidos"
     if (response.toLowerCase().includes("datos recibidos")) {
         const whatsappPrompt = await promptGetWhatsapp(combinedMessages);
@@ -583,6 +579,10 @@ const respondAndFinalize = async (response, combinedMessages, name, numberPhone,
         })
         await putWhatsapp(numberPhone, name, false)
     }
+
+    // Alarm IA
+    const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, response, "IA")
+    if (shouldEndFlow) return { alarm: true }
 
     // Saludo / menú
     const greetings = ['hola', 'como esta', 'buenos dias', 'buenas tardes', 'buenas noches']
