@@ -578,11 +578,12 @@ const respondAndFinalize = async (response, combinedMessages, name, numberPhone,
             action: 'order_processing', file: 'chatbot.js'
         })
         await putWhatsapp(numberPhone, name, false)
-    }
 
-    // Alarm IA
-    const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, response, "IA")
-    if (shouldEndFlow) return { alarm: true }
+    }else{
+        // Alarm IA
+        const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, response, "IA")
+        if (shouldEndFlow) return { alarm: true }
+    }
 
     // Saludo / menú
     const greetings = ['hola', 'como esta', 'buenos dias', 'buenas tardes', 'buenas noches']
