@@ -1,5 +1,5 @@
 import { addKeyword, EVENTS } from '@builderbot/bot';
-import { run } from '../services/openai/index.js';
+import { run, runUpdatePromptServicesProduct } from '../services/openai/index.js';
 import {
     getWhatsappConversation,
     putWhatsappEmailVendor,
@@ -9,7 +9,10 @@ import {
     getWhatsappPlanPremiun,
     putWhatsapp,
     regexAlarm,
-    postWhatsappConversation
+    postWhatsappConversation,
+    putWhatsappOrderConfirmation,
+    promptUpdateProductWhatsapp,
+    promptGetWhatsapp
 } from '../services/aws/index.js';
 import fs from "fs";
 import { defaultLogger } from '../helpers/cloudWatchLogger.js';
@@ -312,6 +315,25 @@ const processAlarm = async (ctx, numberPhone, name, provider, question, UserOrIA
             action: 'alarm_found',
             file: 'media.js'
         })
+
+        const alarmResponse = await putWhatsappEmailVendor(numberPhone, name, question)
+        defaultLogger.info('Procesamiento de alarma (media/img)', {
+            numberPhone,
+            name,
+            message: question,
+            alarmResponse,
+            action: 'alarm_processing',
+            file: 'media.js'
+        })
+
+        const message = UserOrIA === "user" ? "Gracias por tu mensaje. En breve nos pondremos en contacto contigo." : question
+
+        const responseMessage = alarmResponse
+            ? message
+            : "Lo sentimos, pero no tenemos personal disponible en este momento."
+
+        await provider.sendMessage(numberPhone, responseMessage, { media: null })
+
         await putWhatsapp(numberPhone, name, false)
         return true
     }
@@ -1026,13 +1048,38 @@ const respondAndFinalize = async ({
     flowVersion,
     pathImg
 }) => {
-    // Alarm IA
-    const shouldEndFlowAlarm = await processAlarm(ctx, numberPhone, name, provider, response, "IA")
-    if (shouldEndFlowAlarm) {
-        if (pathImg) fs.unlink(pathImg, (error) => {
-            if (error) defaultLogger.error('Error eliminando Imagen', { userId, numberPhone, name, error: error.message, action: 'delete_image', file: 'media.js' });
-        });
-        return { alarm: true }
+    // Procesar orden "datos recibidos" (PRIMERO. Predomina sobre alarma.)
+    if (response.toLowerCase().includes("datos recibidos")) {
+        const whatsappPrompt = await promptGetWhatsapp(combinedMessages);
+        if (whatsappPrompt.products_dynamic) {
+            const updatePrompt = await runUpdatePromptServicesProduct(response);
+            defaultLogger.info('Prompt actualizado (media/img)', {
+                userId, numberPhone, name, updatePrompt,
+                action: 'update_prompt_complete', file: 'media.js'
+            });
+            const responseUpdateProductWhatsapp = await promptUpdateProductWhatsapp(updatePrompt);
+            defaultLogger.info('Respuesta de actualización de producto prompt (media/img)', {
+                userId, numberPhone, name, responseUpdateProductWhatsapp,
+                action: 'product_update_response', file: 'media.js'
+            });
+        }
+        const orderConfirmation = await putWhatsappOrderConfirmation(name, numberPhone, response, "pending_payment")
+        defaultLogger.info('Orden procesada (media/img)', {
+            userId, numberPhone, name, response, orderConfirmation,
+            action: 'order_processing', file: 'media.js'
+        })
+        await putWhatsapp(numberPhone, name, false)
+
+    } else {
+        // Alarm IA (solo si NO hubo "datos recibidos", para no duplicar putWhatsapp
+        // ni cancelar la orden recién creada por una alarma incidental en la misma respuesta.)
+        const shouldEndFlowAlarm = await processAlarm(ctx, numberPhone, name, provider, response, "IA")
+        if (shouldEndFlowAlarm) {
+            if (pathImg) fs.unlink(pathImg, (error) => {
+                if (error) defaultLogger.error('Error eliminando Imagen', { userId, numberPhone, name, error: error.message, action: 'delete_image', file: 'media.js' });
+            });
+            return { alarm: true }
+        }
     }
 
     // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run + isStillMyTurn + alarm IA, justo ANTES de enviar respuesta)

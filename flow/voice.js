@@ -409,12 +409,7 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
                     note: 'DESPUÉS DE ESTE PUNTO, SIN 2ª VALIDACIÓN, SE RESPONDE OBLIGATORIAMENTE',
                     file: 'voice.js'
                 })
-                const shouldEndFlow2 = await processAlarm(ctx, numberPhone, name, provider, response, transcribedText, "IA")
-                if (shouldEndFlow2) {
-                    await stopPresenceSafe()
-                    return endFlow()
-                }
-                // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run + alarm IA, antes de enviar respuesta)
+                // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run, antes de enviar respuesta)
                 try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
                 await respondAndFinalize(response, transcribedText, name, numberPhone, userId, ctx, provider, flowDynamic, state)
                 await stopPresenceSafe()
@@ -476,13 +471,8 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
 
             // ✅ REGLA DE NEGOCIO: no hay 2ª validación isStillMyTurn aquí.
             //    Si llegamos hasta aquí con respuesta IA, se envía sí o sí.
-            const shouldEndFlow2 = await processAlarm(ctx, numberPhone, name, provider, response, transcribedText, "IA")
-            if (shouldEndFlow2) {
-                await stopPresenceSafe()
-                return endFlow()
-            }
 
-            // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run + alarm IA, antes de enviar respuesta)
+            // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run, antes de enviar respuesta)
             try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
 
             await respondAndFinalize(response, combinedInput, name, numberPhone, userId, ctx, provider, flowDynamic, state, flowVersion)
@@ -526,7 +516,7 @@ const respondAndFinalize = async (response, combinedMessages, name, numberPhone,
         return { duplicated: true }
     }
 
-    // Orden "datos recibidos"
+    // Procesar orden "datos recibidos"
     if (response.toLowerCase().includes("datos recibidos")) {
         const whatsappPrompt = await promptGetWhatsapp(combinedMessages);
         if (whatsappPrompt.products_dynamic) {
@@ -546,6 +536,12 @@ const respondAndFinalize = async (response, combinedMessages, name, numberPhone,
             userId, numberPhone, name, response, orderConfirmation,
             action: 'order_processing', file: 'voice.js'
         })
+        await putWhatsapp(numberPhone, name, false)
+
+    } else {
+        // Alarm IA
+        const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, response, combinedMessages, "IA")
+        if (shouldEndFlow) return { alarm: true }
     }
 
     defaultLogger.info('Enviando respuesta final al usuario (voice)', {
