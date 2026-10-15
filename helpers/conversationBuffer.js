@@ -83,6 +83,33 @@ const GREETINGS_ORPHAN_RESET_MS = 2 * 60 * 1000
 const GREETINGS_KEYWORDS = ['hola', 'buenos dias', 'buenas tardes', 'buenas noches', 'que tal', 'alo', 'buen dia', 'holi', 'holaa', 'hey', 'hi', 'hello']
 
 // ============================================================
+// isGreetingResetTrigger(text)
+// Devuelve true si el mensaje del usuario es EXCLUSIVAMENTE un saludo
+// (puede tener puntuación/acentos). Ej: "hola", "buenas noches!!",
+// "buenos días?". Si el saludo va acompañado de una solicitud
+// (ej: "hola quiero un pedido") NO dispara reset, pues hay contexto.
+//
+// Uso: cuando el usuario saluda, se ignora el historial previo
+// (que puede incluir mensajes del dueño del WhatsApp marcados como IA)
+// para que la IA no asuma pedidos/contexto de conversaciones pasadas.
+// ============================================================
+export const isGreetingResetTrigger = (text) => {
+    const t = String(text || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\w\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    if (!t) return false
+    return GREETINGS_KEYWORDS.some(k => {
+        const kn = k.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        return t === kn
+    })
+}
+
+
+// ============================================================
 // THROTTLING DE IMÁGENES (anti-saturación):
 // Sólo se acepta 1 imagen por usuario cada IMAGE_THROTTLE_MS (20s).
 // Cualquier imagen adicional dentro de esa ventana se ignora

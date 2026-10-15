@@ -29,7 +29,8 @@ import {
     waitForMyMessageEntryInBuffer,
     isRafagaVivaActive,
     bumpConversationVersion,
-    registerSyntheticMessage
+    registerSyntheticMessage,
+    isGreetingResetTrigger
 } from '../helpers/conversationBuffer.js';
 
 
@@ -176,7 +177,15 @@ const runCaptionOnlyAsText = async ({
         const stBefore = state.getMyState() || {}
         const historyBefore = Array.isArray(stBefore.history) ? stBefore.history.slice() : []
         let historyForRun = historyBefore
-        if (historyForRun.length === 0) {
+        const greetingResetCaption = isGreetingResetTrigger(caption)
+        if (greetingResetCaption) {
+            historyForRun = []
+            await state.update({ ...stBefore, history: [] }).catch(() => {})
+            defaultLogger.info('Caption-only: saludo detectado → RESET historial', {
+                userId, numberPhone, name, caption,
+                action: 'image_caption_only_greeting_reset', file: 'media.js'
+            })
+        } else if (historyForRun.length === 0) {
             try {
                 const dbHistory = await getWhatsappConversation(numberPhone)
                 if (Array.isArray(dbHistory) && dbHistory.length > 0) {
@@ -899,7 +908,16 @@ export const media = addKeyword(EVENTS.MEDIA)
                 // prompt interno imageProcessedContent). run() recibe
                 // imageProcessedContent como prompt guía (incluye hints de
                 // prioridad caption + OCR).
-                const newHistory = (state.getMyState()?.history ?? []).slice()
+                const greetingResetHere = isGreetingResetTrigger(combinedText || '')
+                const newHistory = greetingResetHere ? [] : (state.getMyState()?.history ?? []).slice()
+                if (greetingResetHere) {
+                    await state.update({ history: [] }).catch(() => {})
+                    defaultLogger.info('Saludo en imagen (caption/OCR) → RESET historial (legacy img)', {
+                        userId, numberPhone, name, combinedText,
+                        action: 'history_greeting_reset_legacy',
+                        file: 'media.js'
+                    })
+                }
                 newHistory.push({ role: 'user', content: combinedText || imageProcessedContent })
                 const response = await run(name, newHistory, imageProcessedContent, numberPhone, responseImage.img)
                 defaultLogger.info('Respuesta del modelo obtenida Texto Imagen (legacy). FLUJO COMPROMETIDO: NO INVALIDAR POR NADA', {
@@ -946,7 +964,16 @@ export const media = addKeyword(EVENTS.MEDIA)
             // tiene combinedInput, lo usamos tal cual (ya trae la unión
             // real ráfaga). Si no, fallback a combinedText.
             const combinedInput = turn.combinedInput || combinedText || imageProcessedContent
-            const newHistory = (state.getMyState()?.history ?? []).slice()
+            const greetingResetHere = isGreetingResetTrigger(combinedInput)
+            const newHistory = greetingResetHere ? [] : (state.getMyState()?.history ?? []).slice()
+            if (greetingResetHere) {
+                await state.update({ history: [] }).catch(() => {})
+                defaultLogger.info('Saludo en imagen (caption/OCR) → RESET historial (coordinado img)', {
+                    userId, numberPhone, name, combinedInput,
+                    action: 'history_greeting_reset_coordinated',
+                    file: 'media.js'
+                })
+            }
             newHistory.push({ role: 'user', content: combinedInput })
 
             defaultLogger.info('Procesando mensajes acumulados (coordinación imagen)', {

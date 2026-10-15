@@ -25,7 +25,8 @@ import {
     getConversationState,
     getCurrentVersion,
     waitForMyMessageEntryInBuffer,
-    isRafagaVivaActive
+    isRafagaVivaActive,
+    isGreetingResetTrigger
 } from '../helpers/conversationBuffer.js'
 
 // Constantes de configuración
@@ -322,21 +323,37 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             TIMEOUT_MS = 5000
 
             // ===== HISTORIAL =====
-            const historyGlobalStatus = state.getMyState()?.history ?? []
-            if (historyGlobalStatus.length <= 0) {
-                const historyDB = await getWhatsappConversation(numberPhone);
-                defaultLogger.info('Historial de conversación recuperado de la base de datos', {
+            // RESET POR SALUDO: si el usuario escribe un saludo puro
+            // (hola, buenas noches, etc.), ignoramos el historial previo
+            // para que la IA no asuma pedidos/contexto de conversaciones
+            // pasadas (que pueden incluir mensajes del dueño del WhatsApp
+            // marcados como IA).
+            const isGreetingReset = isGreetingResetTrigger(ctx.body)
+            if (isGreetingReset) {
+                defaultLogger.info('Saludo detectado → RESET de historial (nueva conversación)', {
                     userId, numberPhone, name,
-                    historyLength: historyDB?.length || 0,
-                    action: 'history_db_retrieved',
+                    messageBody: ctx.body,
+                    action: 'history_greeting_reset',
                     file: 'chatbot.js'
                 })
-                defaultLogger.info('Estado actualizado con el historial de conversación', {
-                    userId, numberPhone, name,
-                    action: 'history_state_updated',
-                    file: 'chatbot.js'
-                })
-                await state.update({ history: historyDB })
+                await state.update({ history: [] })
+            } else {
+                const historyGlobalStatus = state.getMyState()?.history ?? []
+                if (historyGlobalStatus.length <= 0) {
+                    const historyDB = await getWhatsappConversation(numberPhone);
+                    defaultLogger.info('Historial de conversación recuperado de la base de datos', {
+                        userId, numberPhone, name,
+                        historyLength: historyDB?.length || 0,
+                        action: 'history_db_retrieved',
+                        file: 'chatbot.js'
+                    })
+                    defaultLogger.info('Estado actualizado con el historial de conversación', {
+                        userId, numberPhone, name,
+                        action: 'history_state_updated',
+                        file: 'chatbot.js'
+                    })
+                    await state.update({ history: historyDB })
+                }
             }
 
             // ===== KEEP-ALIVE PRESENCIA "escribiendo…" =====
@@ -398,7 +415,15 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 userTimeouts[userId] = setTimeout(async () => {
                     const combinedMessages = userBuffers[userId].join(' ')
                     userBuffers[userId] = []
-                    const newHistory = (state.getMyState()?.history ?? [])
+                    const greetingResetHere = isGreetingResetTrigger(combinedMessages)
+                    const newHistory = greetingResetHere ? [] : (state.getMyState()?.history ?? [])
+                    if (greetingResetHere) {
+                        defaultLogger.info('Saludo en mensaje combinado → RESET historial (legacy texto)', {
+                            userId, numberPhone, name, combinedMessages,
+                            action: 'history_greeting_reset_legacy',
+                            file: 'chatbot.js'
+                        })
+                    }
                     newHistory.push({ role: 'user', content: combinedMessages })
                     defaultLogger.info('Procesando mensajes acumulados (legacy fallback texto)', {
                         userId, numberPhone, name, combinedMessages, history: newHistory,
@@ -446,7 +471,15 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 userBuffers[userId] = []
                 if (userTimeouts[userId]) { clearTimeout(userTimeouts[userId]); userTimeouts[userId] = null }
 
-                const newHistory = (state.getMyState()?.history ?? [])
+                const greetingResetHere = isGreetingResetTrigger(combinedInput)
+                const newHistory = greetingResetHere ? [] : (state.getMyState()?.history ?? [])
+                if (greetingResetHere) {
+                    defaultLogger.info('Saludo en mensaje combinado → RESET historial (coordinado texto)', {
+                        userId, numberPhone, name, combinedInput,
+                        action: 'history_greeting_reset_coordinated',
+                        file: 'chatbot.js'
+                    })
+                }
                 newHistory.push({ role: 'user', content: combinedInput })
 
                 defaultLogger.info('Procesando mensajes acumulados (coordinación compartida texto)', {

@@ -28,7 +28,8 @@ import {
     getCurrentVersion,
     consumeLatestPendingOfType,
     waitForMyMessageEntryInBuffer,
-    isRafagaVivaActive
+    isRafagaVivaActive,
+    isGreetingResetTrigger
 } from '../helpers/conversationBuffer.js'
 
 // ============================================================
@@ -396,7 +397,16 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
 
             if (Number(flowVersion || 0) <= 0) {
                 // ====== CAMINO LEGACY (sin coordinación compartida) =====
-                const newHistory = (state.getMyState()?.history ?? []).slice()
+                const greetingResetHere = isGreetingResetTrigger(transcribedText)
+                const newHistory = greetingResetHere ? [] : (state.getMyState()?.history ?? []).slice()
+                if (greetingResetHere) {
+                    await state.update({ history: [] })
+                    defaultLogger.info('Saludo detectado en audio → RESET historial (legacy audio)', {
+                        userId, numberPhone, name, transcribedText,
+                        action: 'history_greeting_reset_legacy',
+                        file: 'voice.js'
+                    })
+                }
                 newHistory.push({ role: 'user', content: transcribedText })
                 defaultLogger.info('Procesando mensajes acumulados (legacy audio)', {
                     userId, numberPhone, name, transcribedText,
@@ -439,7 +449,16 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
 
             const combinedInput = turn.combinedInput || transcribedText
 
-            const newHistory = (state.getMyState()?.history ?? []).slice()
+            const greetingResetHere = isGreetingResetTrigger(combinedInput)
+            const newHistory = greetingResetHere ? [] : (state.getMyState()?.history ?? []).slice()
+            if (greetingResetHere) {
+                await state.update({ history: [] })
+                defaultLogger.info('Saludo detectado en audio → RESET historial (coordinado audio)', {
+                    userId, numberPhone, name, combinedInput,
+                    action: 'history_greeting_reset_coordinated',
+                    file: 'voice.js'
+                })
+            }
             newHistory.push({ role: 'user', content: combinedInput })
 
             defaultLogger.info('Procesando mensajes acumulados (coordinación audio)', {
