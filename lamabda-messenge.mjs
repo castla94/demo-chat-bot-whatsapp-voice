@@ -181,7 +181,12 @@ export const handler = async (event) => {
         const prompt = await getPromptLambda(settingMessenger.email,fullContext)
 
         // 1️⃣ Obtener histórico
-        const history = await getChatHistory(sender_id,settingMessenger.email);
+        // RESET POR SALUDO: si fullContext es solo un saludo, ignoramos el historial
+        // previo para que la IA no asuma pedidos/contexto de conversaciones pasadas.
+        const isGreetingReset = isGreetingResetTrigger(fullContext)
+        const history = isGreetingReset
+          ? (console.log(`Saludo detectado → RESET de historial (Messenger) para ${sender_id}`), [])
+          : await getChatHistory(sender_id,settingMessenger.email);
 
         // 2️⃣ Generar respuesta IA
         const reply = await getOpenAIResponse(prompt, history, fullContext );
@@ -747,6 +752,24 @@ async function getPromptLambda(email,question) {
 }
 
 
+
+// 🔹 Detecta si el mensaje es exclusivamente un saludo (hola, buenas noches, etc.)
+// para hacer RESET del historial y que la IA no asuma pedidos/contexto previo.
+const GREETINGS_KEYWORDS_MS = ['hola', 'buenos dias', 'buenas tardes', 'buenas noches', 'que tal', 'alo', 'buen dia', 'holi', 'holaa', 'hey', 'hi', 'hello'];
+function isGreetingResetTrigger(text) {
+  const t = String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  return GREETINGS_KEYWORDS_MS.some(k => {
+    const kn = k.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return t === kn;
+  });
+}
 
 // 🔹 Obtener los últimos 20 mensajes del historial
 async function getChatHistory(senderId,email) {

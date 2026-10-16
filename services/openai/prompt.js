@@ -92,7 +92,8 @@ export const generatePrompt = async (name,question) => {
     if(getWhatsappPrompt && getWhatsappPrompt.prompt){
         defaultLogger.info('Obteniendo prompt desde base de datos', {
             action: 'get_prompt_from_db',
-            file: 'openai/prompt.js'
+            file: 'openai/prompt.js',
+            prompt: getWhatsappPrompt.prompt
         });
         return getWhatsappPrompt.prompt.replaceAll('{customer_name}', name).replaceAll('{question}', question)
     }
