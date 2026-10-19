@@ -516,7 +516,13 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run, antes de enviar respuesta)
                 try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
 
-                await respondAndFinalize(response, combinedInput, name, numberPhone, userId, ctx, provider, flowDynamic, state, flowVersion)
+                // 🔴 LIMPIEZA CON LA VERSIÓN REAL ADQUIRIDA (NO la de nacimiento).
+                // turn.finalVersion = conv.version en el momento de adquirir el turno.
+                // Si usáramos flowVersion (versión de nacimiento, p.ej. 1) cuando el
+                // buffer ya creció a 4 (mensajes enviados por separado), clearConversation
+                // "preservaría" los mensajes 2,3,4 (ya respondidos) y los reinyectaría
+                // en el siguiente combinedInput → respuestas duplicadas con mensajes viejos.
+                await respondAndFinalize(response, combinedInput, name, numberPhone, userId, ctx, provider, flowDynamic, state, turn.finalVersion)
                 await stopPresenceSafe()
             }
         } catch (error) {

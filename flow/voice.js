@@ -494,7 +494,10 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
             // ✅ MARCAR LEÍDO SÓLO AQUÍ (después de run, antes de enviar respuesta)
             try { await provider.vendor.readMessages([ctx.key]) } catch (_) {}
 
-            await respondAndFinalize(response, combinedInput, name, numberPhone, userId, ctx, provider, flowDynamic, state, flowVersion)
+            // 🔴 Limpiar con la versión REAL adquirida (turn.finalVersion), no con la
+            // de nacimiento del flujo: así no se "preservan" mensajes ya respondidos
+            // cuando el usuario envió varios mensajes por separado.
+            await respondAndFinalize(response, combinedInput, name, numberPhone, userId, ctx, provider, flowDynamic, state, turn.finalVersion)
             await stopPresenceSafe()
 
         } catch (error) {

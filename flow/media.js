@@ -1011,7 +1011,10 @@ export const media = addKeyword(EVENTS.MEDIA)
                 combinedMessages: combinedInput,
                 image: responseImage,
                 name, numberPhone, userId, ctx, provider, flowDynamic, state,
-                flowVersion,
+                // 🔴 Limpiar con la versión REAL adquirida (turn.finalVersion), no con la
+                // de nacimiento: evita preservar/renumerar mensajes ya respondidos y
+                // reinyectarlos como "nuevos" en el siguiente combinedInput.
+                flowVersion: turn.finalVersion,
                 pathImg
             })
             await stopPresenceSafe()
