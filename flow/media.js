@@ -99,6 +99,18 @@ const startPresenceKeepAlive = (provider, jid, { presenceType = 'composing', fil
 const IMAGE_DOWNLOAD_ERROR_MSG = 'Disculpa, no logré descargar la imagen 😔. ¿Puedes enviármela nuevamente?'
 
 // ============================================================
+// VIDEO: cuando el usuario manda un video NO lo procesamos.
+// Se envía como PREGUNTA a la IA para que se derive a un asesor.
+// ============================================================
+const VIDEO_ADVISOR_QUESTION = 'El usuario mandó un video, así que llama a un asesor.'
+
+const isVideoMessageCtx = (ctx) => Boolean(
+    ctx?.message?.videoMessage ||
+    ctx?.msg?.message?.videoMessage ||
+    ctx?.msg?.videoMessage
+)
+
+// ============================================================
 // Helper: ENVÍA SEGURO (chunks, numberPhone largo gswa usa flowDynamic).
 // ============================================================
 const sendReplySafe = async (numberPhone, provider, flowDynamic, text) => {
@@ -137,7 +149,7 @@ const sendReplySafe = async (numberPhone, provider, flowDynamic, text) => {
 // ============================================================
 const runCaptionOnlyAsText = async ({
     captionRaw, ctx, numberPhone, userId, name, provider, flowDynamic, state,
-    presence
+    presence, userContent: userContentOverride
 }) => {
     const caption = String(captionRaw || '').trim()
     if (!caption) {
@@ -198,7 +210,7 @@ const runCaptionOnlyAsText = async ({
                 }
             } catch (_dbErr) { /* no-op: usar [] */ }
         }
-        const userContent = `El usuario envió una imagen que no fue procesada. Su texto (caption) es: "${caption}". Responde directamente a este texto como si fuera un mensaje normal.`
+        const userContent = String(userContentOverride || `El usuario envió una imagen que no fue procesada. Su texto (caption) es: "${caption}". Responde directamente a este texto como si fuera un mensaje normal.`)
         const newHistory = historyForRun.slice()
         newHistory.push({ role: 'user', content: userContent })
         defaultLogger.info('Caption-only: inicio llamada IA run(caption)', {
@@ -600,6 +612,26 @@ export const media = addKeyword(EVENTS.MEDIA)
                     file: 'media.js'
                 })
                 await state.update({ history: historyDB })
+            }
+
+            // ============================================================
+            // VIDEO → mensaje fijo enviado como PREGUNTA a la IA.
+            // No se descarga ni procesa el video: se deriva a un asesor.
+            // ============================================================
+            if (isVideoMessageCtx(ctx)) {
+                defaultLogger.info('Video recibido → se envía como pregunta a la IA (llamar a un asesor)', {
+                    userId, numberPhone, name, messageId,
+                    question: VIDEO_ADVISOR_QUESTION,
+                    action: 'media_video_advisor_question_start',
+                    file: 'media.js'
+                })
+                await runCaptionOnlyAsText({
+                    captionRaw: VIDEO_ADVISOR_QUESTION,
+                    userContent: VIDEO_ADVISOR_QUESTION,
+                    ctx, numberPhone, userId, name,
+                    provider, flowDynamic, state, presence: null
+                })
+                return endFlow()
             }
 
             // ===== PROCESAR Y GUARDAR LA IMAGEN (1 SOLA VEZ AHORA - antes estaba duplicado) =====
