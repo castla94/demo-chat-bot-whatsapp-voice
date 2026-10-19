@@ -26,11 +26,12 @@ import {
     getCurrentVersion,
     waitForMyMessageEntryInBuffer,
     isRafagaVivaActive,
-    isGreetingResetTrigger
+    isGreetingResetTrigger,
+    resolveSilenceTextAudioWaitMs
 } from '../helpers/conversationBuffer.js'
 
 // Constantes de configuración
-let TIMEOUT_MS = 5000 // Tiempo de espera para consolidación: 5 segundos
+let TIMEOUT_MS = 5000 // Debounce legacy (se recalcula por turno desde SILENCE_TEXT_AUDIO_SECONDS)
 
 // Almacenamiento en memoria para gestionar mensajes de usuarios
 const userBuffers = {} // Buffer de mensajes por usuario
@@ -318,9 +319,10 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
             const shouldEndFlow = await processAlarm(ctx, numberPhone, name, provider, ctx.body, "user")
             if (shouldEndFlow) return endFlow()
 
-            // TIMEOUT_MS para legacy fallback cuando conversationVersion <= 0
-            // Fijo en 5s para respuesta inmediata (sin random)
-            TIMEOUT_MS = 5000
+            // TIMEOUT_MS para legacy fallback cuando conversationVersion <= 0.
+            // Se toma de SILENCE_TEXT_AUDIO_SECONDS (fijo o rango aleatorio)
+            // para respetar la misma ventana que la coordinación compartida.
+            TIMEOUT_MS = resolveSilenceTextAudioWaitMs()
 
             // ===== HISTORIAL =====
             // RESET POR SALUDO: si el usuario escribe un saludo puro

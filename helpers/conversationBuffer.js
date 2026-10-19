@@ -23,11 +23,82 @@ import { defaultLogger } from './cloudWatchLogger.js';
 // ============================================================
 // VENTANAS DE SILENCIO DINÁMICAS POR TIPO
 // ============================================================
-// TEXTO / AUDIO: 5s  (rápido, no requieren contexto adicional)
+// TEXTO / AUDIO: configurable por ENV (default 5s)
 // IMAGEN (último msg): 45s (esperar caption/texto de contexto del usuario)
 // ============================================================
-const SILENCE_TEXT_AUDIO_MS = 5 * 1000
 const SILENCE_IMAGE_MS = 45 * 1000
+
+// ============================================================
+// VENTANA DE SILENCIO TEXTO/AUDIO CONFIGURABLE POR ENTORNO
+//
+// Variable de entorno: SILENCE_TEXT_AUDIO_SECONDS
+//   - "10"    → 10 segundos fijos.
+//   - "45-60" → aleatorio entre 45 y 60 segundos. El valor se elige
+//               UNA sola vez por ráfaga para que la espera sea estable
+//               durante todo el turno (no cambia tick a tick).
+//   - vacío o inválido → default 5 segundos.
+//
+// Sirve tanto para clientes que necesitan respuesta inmediata (10) como
+// para clientes que necesitan recibir varios mensajes consecutivos y que
+// el bot los acumule en el buffer y luego los procese unificados (45-60).
+// ============================================================
+const DEFAULT_SILENCE_TEXT_AUDIO_MS = 5 * 1000
+
+const parseSilenceWindowConfig = (raw, defaultMs) => {
+    const s = String(raw ?? '').trim()
+    if (!s) return { minMs: defaultMs, maxMs: defaultMs, isRange: false, source: 'default' }
+    // Rango "45-60" (admite decimales con punto o coma)
+    const range = s.match(/^(\d+(?:[.,]\d+)?)\s*-\s*(\d+(?:[.,]\d+)?)$/)
+    if (range) {
+        const a = Number(String(range[1]).replace(',', '.')) * 1000
+        const b = Number(String(range[2]).replace(',', '.')) * 1000
+        if (Number.isFinite(a) && Number.isFinite(b) && a > 0 && b > 0) {
+            return { minMs: Math.min(a, b), maxMs: Math.max(a, b), isRange: true, source: s }
+        }
+    }
+    // Valor único "10"
+    const single = Number(s.replace(',', '.'))
+    if (Number.isFinite(single) && single > 0) {
+        return { minMs: single * 1000, maxMs: single * 1000, isRange: false, source: s }
+    }
+    return { minMs: defaultMs, maxMs: defaultMs, isRange: false, source: 'invalid_fallback' }
+}
+
+const SILENCE_TEXT_AUDIO_CONFIG = parseSilenceWindowConfig(
+    process.env.SILENCE_TEXT_AUDIO_SECONDS,
+    DEFAULT_SILENCE_TEXT_AUDIO_MS
+)
+
+// Valor por defecto estático (mínimo del rango o el valor fijo).
+const SILENCE_TEXT_AUDIO_MS = SILENCE_TEXT_AUDIO_CONFIG.minMs
+// Valor máximo posible de la ventana texto/audio (para chequeos de "ráfaga viva").
+const SILENCE_TEXT_AUDIO_MAX_MS = SILENCE_TEXT_AUDIO_CONFIG.maxMs
+// Ventana amplia para detectar ráfaga viva (cubre tanto imagen 45s como texto configurado).
+const RAFAGA_VIVA_WINDOW_MS = Math.max(SILENCE_IMAGE_MS, SILENCE_TEXT_AUDIO_MAX_MS)
+
+// Elige el valor de la ventana para la ráfaga actual:
+//   - fijo → el valor configurado.
+//   - rango → aleatorio entre min y max (en ms).
+const pickSilenceTextAudioMs = () => {
+    const cfg = SILENCE_TEXT_AUDIO_CONFIG
+    if (!cfg.isRange) return cfg.minMs
+    return Math.floor(cfg.minMs + Math.random() * (cfg.maxMs - cfg.minMs + 1))
+}
+
+// Alias exportado: los flows lo usan para el debounce del camino legacy
+// (cuando el listener Baileys no insertó el mensaje en el buffer) y así
+// respetar la misma ventana configurada por SILENCE_TEXT_AUDIO_SECONDS.
+export const resolveSilenceTextAudioWaitMs = pickSilenceTextAudioMs
+
+defaultLogger.info('Ventana de silencio texto/audio configurada', {
+    envRaw: SILENCE_TEXT_AUDIO_CONFIG.source,
+    isRange: SILENCE_TEXT_AUDIO_CONFIG.isRange,
+    minMs: SILENCE_TEXT_AUDIO_CONFIG.minMs,
+    maxMs: SILENCE_TEXT_AUDIO_CONFIG.maxMs,
+    imageWindowMs: SILENCE_IMAGE_MS,
+    action: 'conversation_silence_config_loaded',
+    file: 'conversationBuffer.js'
+})
 
 const POLL_TICK_MS = 1000
 const MAX_WAIT_MS = 15 * 60 * 1000 // hard limit para no colgar polling para siempre
@@ -190,6 +261,7 @@ const scheduleInvalidationReset = (conv, phoneKey, phone, callerFile) => {
                 conv.messages = []
                 conv.version = 0
                 conv.lastActivityAt = 0
+                conv.silenceTextAudioWindowMs = 0
                 defaultLogger.info('Conversación reseteada por TTL 30s invalidación huérfana', {
                     phoneKey: conv.key,
                     phone,
@@ -263,6 +335,14 @@ const ensureConversation = (phone) => {
             // ============================================================
             lastImageAcceptedAt: 0,
             lastImageAcceptedMessageId: null,
+            // ============================================================
+            // silenceTextAudioWindowMs: ventana de silencio texto/audio
+            // elegida para la ráfaga ACTUAL. Se fija al insertar el primer
+            // mensaje de una ráfaga nueva (buffer vacío) y se reutiliza
+            // durante todo el turno. Si SILENCE_TEXT_AUDIO_SECONDS es un
+            // rango (ej "45-60"), aquí queda el valor aleatorio elegido.
+            // ============================================================
+            silenceTextAudioWindowMs: 0,
             // ============================================================
             // throttledImageMessageIds: lista de messageIds de imágenes
             // que fueron RECHAZADAS por throttling (con TTL de 30s).
@@ -626,6 +706,7 @@ export const addReceivedMessage = (phone, {
         conv.messages = []
         conv.version = 0
         conv.lastActivityAt = 0
+        conv.silenceTextAudioWindowMs = 0
         conv.aliveFlowsCount = 0
     }
 
@@ -674,6 +755,27 @@ export const addReceivedMessage = (phone, {
     // INCREMENTAR VERSIÓN GLOBAL (una por cada mensaje FÍSICO del usuario)
     conv.version += 1
     const assignedVersion = conv.version
+
+    // ============================================================
+    // NUEVA RÁFAGA: si el buffer estaba vacío antes de insertar este
+    // mensaje, fijamos la ventana de silencio texto/audio para TODA la
+    // ráfaga. Si SILENCE_TEXT_AUDIO_SECONDS es un rango (ej "45-60"),
+    // el valor aleatorio se elige AQUÍ una sola vez (no en cada tick
+    // de polling, lo que causaría una espera inestable).
+    // ============================================================
+    if (conv.messages.length === 0) {
+        conv.silenceTextAudioWindowMs = pickSilenceTextAudioMs()
+        defaultLogger.info('Ventana de silencio texto/audio fijada para la nueva ráfaga', {
+            phoneKey: conv.key,
+            phone,
+            incomingType: typeNorm,
+            silenceWindowMs: conv.silenceTextAudioWindowMs,
+            envRaw: SILENCE_TEXT_AUDIO_CONFIG.source,
+            isRange: SILENCE_TEXT_AUDIO_CONFIG.isRange,
+            action: 'conversation_silence_window_picked',
+            file
+        })
+    }
 
     // Actualizar última actividad (solo con mensajes RECIBIDOS, no con procesamiento interno).
     const receivedAt = receivedAtMs && Number(receivedAtMs) > 0 ? Number(receivedAtMs) : Date.now()
@@ -1010,6 +1112,9 @@ export const getConversationState = (phone) => {
         meaningfulCount: meaningfulMessages.length,
         unsupportedCount: conv.messages.length - meaningfulMessages.length,
         bufferTypes: conv.messages.map(m => m.type),
+        // Ventana de silencio texto/audio vigente para la ráfaga actual
+        // (40000-60000 si SILENCE_TEXT_AUDIO_SECONDS es un rango).
+        silenceWindowMs: Number(conv.silenceTextAudioWindowMs) || 0,
         // FIX LIMBO: allReady ya se calcula solo sobre tipos válidos (diagnóstico correcto)
         allReady: meaningfulMessages.length === 0 ? false : !anyPendingMeaningful,
         anyPendingMeaningful,
@@ -1076,6 +1181,21 @@ export const registerSyntheticMessage = (phone, msg, opts = {}) => {
     }
     const id = String(msg.id || `syn_${now}_${Math.random().toString(36).slice(2,8)}`)
     const content = String(msg.content || '').trim()
+    // Si el buffer estaba vacío, esta entry inicia una ráfaga nueva:
+    // fijamos la ventana de silencio texto/audio para todo el turno.
+    if (conv.messages.length === 0) {
+        conv.silenceTextAudioWindowMs = pickSilenceTextAudioMs()
+        defaultLogger.info('Ventana de silencio texto/audio fijada (entry sintética, ráfaga nueva)', {
+            phoneKey: conv.key,
+            phone,
+            incomingType: typeNorm,
+            silenceWindowMs: conv.silenceTextAudioWindowMs,
+            envRaw: SILENCE_TEXT_AUDIO_CONFIG.source,
+            isRange: SILENCE_TEXT_AUDIO_CONFIG.isRange,
+            action: 'conversation_silence_window_picked_synthetic',
+            file: opts?.file || 'conversationBuffer.js'
+        })
+    }
     const entry = {
         id,
         messageId: msg.messageId || null,
@@ -1124,7 +1244,7 @@ export const isRafagaVivaActive = (phone, { file = 'conversationBuffer.js' } = {
     // c) (<= 45s desde último mensaje) Y (>=2 mensajes o tipos mixtos)
     const multiMsg = meaningful.length > 1
     const mixedTypes = uniqueTypes.size > 1
-    const recentEnough = sinceLast <= SILENCE_IMAGE_MS
+    const recentEnough = sinceLast <= RAFAGA_VIVA_WINDOW_MS
     const active = multiMsg || mixedTypes || (recentEnough && meaningful.length > 1)
     const detail = {
         bufferCount: meaningful.length,
@@ -1133,7 +1253,7 @@ export const isRafagaVivaActive = (phone, { file = 'conversationBuffer.js' } = {
         multiMsg,
         mixedTypes,
         recentEnough,
-        silenceWindowMs: SILENCE_IMAGE_MS
+        silenceWindowMs: RAFAGA_VIVA_WINDOW_MS
     }
     if (active) {
         defaultLogger.info('Ráfaga viva detectada: evitaremos legacy directo y usaremos waitForTurn para unificar 1 respuesta.', {
@@ -1375,7 +1495,12 @@ export const waitForTurn = async (phone, {
         // - Sin tipo aún (frontera): texto por defecto (mínimo 5s)
         // ============================================================
         const isLastImage = (lastMeaningfulType === 'image')
-        const silenceWindowMs = isLastImage ? SILENCE_IMAGE_MS : SILENCE_TEXT_AUDIO_MS
+        // Texto/audio: ventana fijada por ráfaga (env SILENCE_TEXT_AUDIO_SECONDS),
+        // fallback al default si no se fijó (p.ej. entry inyectada por flow).
+        const textAudioWindowMs = Number(conv.silenceTextAudioWindowMs) > 0
+            ? Number(conv.silenceTextAudioWindowMs)
+            : SILENCE_TEXT_AUDIO_MS
+        const silenceWindowMs = isLastImage ? SILENCE_IMAGE_MS : textAudioWindowMs
         const stabilizationMs = isLastImage ? STABILIZATION_IMAGE_MS : STABILIZATION_TEXT_AUDIO_MS
 
         const inSilenceWindow45s = sinceLastActivity < silenceWindowMs
@@ -1876,6 +2001,7 @@ export const clearConversationAfterResponse = (phone, {
         conv.lastActivityAt = 0
         conv.version = 0
         conv.firstFlowVersionByType = {}
+        conv.silenceTextAudioWindowMs = 0
         if (Number(conv.aliveFlowsCount || 0) <= 0) conv.aliveFlowsCount = 0
     }
     defaultLogger.info('Buffer de conversación limpio (respuesta enviada OK)', {
