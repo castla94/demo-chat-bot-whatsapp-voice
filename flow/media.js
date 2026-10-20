@@ -111,6 +111,37 @@ const isVideoMessageCtx = (ctx) => Boolean(
 )
 
 // ============================================================
+// Helper: ¿está PERMITIDO responder a este número?
+// false si: número en whitelist, bot desactivado globalmente,
+// o contacto desactivado.
+// Se usa en el catch para NO responder si el error ocurrió ANTES
+// de las validaciones (p. ej. al obtener la foto de perfil).
+// Ante error/duda en la verificación → false (no responder).
+// ============================================================
+const isReplyAllowedForNumber = async (numberPhone, { name = '', file = 'media.js' } = {}) => {
+    try {
+        const isWhitelisted = await getWhatsappWhitelist(numberPhone)
+        if (isWhitelisted) return false
+
+        const botStatus = await whatsappStatus()
+        if (botStatus && !botStatus.status) return false
+
+        const userStatus = await getWhatsapp(numberPhone, { name, profilePictureUrl: null })
+        if (userStatus && !userStatus.status) return false
+
+        return true
+    } catch (e) {
+        defaultLogger.warn('isReplyAllowedForNumber: no se pudo verificar estado → se asume NO responder', {
+            numberPhone, name,
+            error: e?.message || String(e),
+            action: 'media_reply_allowed_check_error',
+            file
+        })
+        return false
+    }
+}
+
+// ============================================================
 // Helper: ENVÍA SEGURO (chunks, numberPhone largo gswa usa flowDynamic).
 // ============================================================
 const sendReplySafe = async (numberPhone, provider, flowDynamic, text) => {
@@ -459,6 +490,10 @@ export const media = addKeyword(EVENTS.MEDIA)
         // para NO SILENCIAR al usuario cuando escribió texto con la imagen.
         const hasCaptionNow = Boolean(mediaCaption && String(mediaCaption).trim())
 
+        // Bandera: se pone false en las ramas de desactivado (whitelist / bot global / contacto).
+        // El catch la usa (y re-verifica) para NO responder si el estado está desactivado.
+        let respondAllowed = true
+
         try {
             defaultLogger.info('Flujo imagen: procesando (sin throttle). Iniciando setup normal.', {
                 userId, numberPhone, name, messageId,
@@ -556,6 +591,7 @@ export const media = addKeyword(EVENTS.MEDIA)
                 file: 'media.js'
             })
             if (isWhitelisted) {
+                respondAllowed = false
                 defaultLogger.info('Usuario en whitelist, finalizando flujo', {
                     userId, numberPhone, name,
                     action: 'whitelist_end_flow',
@@ -571,6 +607,7 @@ export const media = addKeyword(EVENTS.MEDIA)
                 file: 'media.js'
             })
             if (botStatus && !botStatus.status) {
+                respondAllowed = false
                 defaultLogger.info('Bot desactivado globalmente', {
                     action: 'global_status_end_flow',
                     file: 'media.js'
@@ -586,6 +623,7 @@ export const media = addKeyword(EVENTS.MEDIA)
             })
 
             if (userStatus && !userStatus.status) {
+                respondAllowed = false
                 defaultLogger.info('Usuario desactivado', {
                     userId, numberPhone, name,
                     action: 'user_disabled_end_flow',
@@ -1076,6 +1114,22 @@ export const media = addKeyword(EVENTS.MEDIA)
                 file: 'media.js'
             })
             // 🟢 SIEMPRE responder algo. No dejar usuario en SILENCIO.
+            // EXCEPCIÓN: si el bot global o el contacto están desactivados (o el
+            // número está en whitelist), NO se responde. Re-verificamos porque el
+            // error pudo ocurrir ANTES de las validaciones (p. ej. foto de perfil).
+            let canReply = respondAllowed
+            if (canReply) {
+                canReply = await isReplyAllowedForNumber(numberPhone, { name, file: 'media.js' })
+            }
+            if (!canReply) {
+                defaultLogger.info('Error en flujo de medios pero bot/contacto desactivado o whitelist → NO se responde', {
+                    userId, numberPhone, name,
+                    respondAllowed,
+                    action: 'media_flow_catch_skip_reply_disabled',
+                    file: 'media.js'
+                })
+                return endFlow()
+            }
             try {
                 try { if (ctx && ctx.key) await provider.vendor.readMessages([ctx.key]).catch(() => {}) } catch (_) {}
                 try {
