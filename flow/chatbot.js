@@ -211,6 +211,24 @@ export const chatbot = addKeyword(EVENTS.WELCOME)
                 myVersion = 0
                 if (myConversationEntryId) myConversationEntryId = null
             }
+            // ============================================================
+            // GUARD "RESPUESTA FANTASMA": BuilderBot puede despachar este
+            // flujo TARDE (cola por usuario). Si el mensaje YA fue
+            // respondido en un turno anterior, su entry ya no está en el
+            // buffer → NO caer a legacy (respondería el mismo texto otra vez).
+            // ============================================================
+            if (myMatchType === 'already_answered') {
+                defaultLogger.info('Texto: mensaje YA respondido previamente → flujo termina en silencio (evita respuesta fantasma)', {
+                    userId, numberPhone, name,
+                    messageId: ctx?.key?.id || null,
+                    messageBody: ctx.body,
+                    action: 'conversation_text_already_answered_skip',
+                    file: 'chatbot.js'
+                })
+                userBuffers[userId] = []
+                if (userTimeouts[userId]) { clearTimeout(userTimeouts[userId]); userTimeouts[userId] = null }
+                return endFlow()
+            }
             const convStateBefore = getConversationState(numberPhone)
             defaultLogger.info('Conversación compartida (texto - snapshot después de encontrar mi entry)', {
                 userId,

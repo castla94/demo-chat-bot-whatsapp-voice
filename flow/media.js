@@ -507,6 +507,19 @@ export const media = addKeyword(EVENTS.MEDIA)
                 myVersion = 0
                 if (myImageEntryId) myImageEntryId = null
             }
+            // ============================================================
+            // GUARD "RESPUESTA FANTASMA": si esta imagen/caption YA fue
+            // respondida (su entry ya fue limpiada), NO responder de nuevo.
+            // ============================================================
+            if (myMatchType === 'already_answered') {
+                defaultLogger.info('Imagen: mensaje YA respondido previamente → flujo termina en silencio (evita respuesta fantasma)', {
+                    userId, numberPhone, name,
+                    messageId: ctx?.key?.id || null,
+                    action: 'conversation_media_already_answered_skip',
+                    file: 'media.js'
+                })
+                return endFlow()
+            }
             let pendingImage = myImageEntryId ? { entryId: myImageEntryId } : consumeLatestPendingOfType(numberPhone, 'image')
             const convStateBefore = getConversationState(numberPhone)
             defaultLogger.info('Conversación compartida (imagen - snapshot después de encontrar mi entry)', {

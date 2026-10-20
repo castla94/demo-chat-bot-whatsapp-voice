@@ -197,6 +197,19 @@ export const voice = addKeyword(EVENTS.VOICE_NOTE)
                 myVersion = 0
                 if (myAudioEntryId) myAudioEntryId = null
             }
+            // ============================================================
+            // GUARD "RESPUESTA FANTASMA": si el audio YA fue respondido
+            // (su entry ya fue limpiada), NO caer a legacy ni responder de nuevo.
+            // ============================================================
+            if (myMatchType === 'already_answered') {
+                defaultLogger.info('Audio: mensaje YA respondido previamente → flujo termina en silencio (evita respuesta fantasma)', {
+                    userId, numberPhone, name,
+                    messageId: ctx?.key?.id || null,
+                    action: 'conversation_voice_already_answered_skip',
+                    file: 'voice.js'
+                })
+                return endFlow()
+            }
             let pendingAudio = myAudioEntryId ? { entryId: myAudioEntryId } : consumeLatestPendingOfType(numberPhone, 'audio')
             const convStateBefore = getConversationState(numberPhone)
             defaultLogger.info('Conversación compartida (audio - snapshot después de encontrar mi entry)', {

@@ -124,6 +124,17 @@ const STABILIZATION_IMAGE_MS = 5 * 1000
 const MY_MESSAGE_ENTRY_TICK_MS = 100
 const MY_MESSAGE_ENTRY_WAIT_MS = 4 * 1000
 
+// ============================================================
+// MENSAJES YA RESPONDIDOS (evita "respuesta fantasma").
+// Cuando un flujo responde y limpia el buffer, guardamos aquí los
+// messageIds que fueron respondidos. Si BuilderBot despacha TARDE
+// otro flujo de un mensaje que YA se respondió (su entry ya no está
+// en el buffer porque se limpió), lo detectamos por messageId y NO
+// lo mandamos al legacy (que respondería de nuevo el mismo texto).
+// ============================================================
+const RECENT_ANSWERED_TTL_MS = 10 * 60 * 1000 // 10 min
+const RECENT_ANSWERED_MAX = 50
+
 // Deadlock safety: turnLock mismo tipo se cancela si ganador no terminó en 10s
 // (protección si un flow se cuelga dentro de run() sin responder).
 const TURN_LOCK_SAME_TYPE_DEADLOCK_MS = 10 * 1000
@@ -348,7 +359,14 @@ const ensureConversation = (phone) => {
             // que fueron RECHAZADAS por throttling (con TTL de 30s).
             // media.js consulta esto al inicio para salir sin esperar.
             // ============================================================
-            throttledImageMessageIds: [] // [{ id, expiresAt }]
+            throttledImageMessageIds: [], // [{ id, expiresAt }]
+            // ============================================================
+            // recentlyAnswered: messageIds YA RESPONDIDOS (con TTL).
+            // Sirve para que un flujo despachado tarde por BuilderBot
+            // (cuando su entry ya fue limpiada tras la respuesta) no
+            // genere una RESPUESTA FANTASMA repitiendo el mismo mensaje.
+            // ============================================================
+            recentlyAnswered: [] // [{ messageId, at }]
         })
     }
     return conversations.get(key)
@@ -365,6 +383,37 @@ const getLastMeaningfulMessage = (conv) => {
     if (meaningful.length === 0) return null
     meaningful.sort((a, b) => Number(b.receivedAt || 0) - Number(a.receivedAt || 0))
     return meaningful[0]
+}
+
+// ============================================================
+// "RESPUESTA FANTASMA": registro de messageIds ya respondidos.
+// - isRecentlyAnswered: ¿este messageId ya se respondió (con TTL)?
+// - markRecentlyAnswered: registra los messageIds respondidos,
+//   podando los expirados y limitando el tamaño.
+// ============================================================
+const isRecentlyAnswered = (conv, messageId) => {
+    const id = String(messageId || '').trim()
+    if (!conv || !id) return false
+    if (!Array.isArray(conv.recentlyAnswered)) return false
+    const now = Date.now()
+    return conv.recentlyAnswered.some(e =>
+        e && String(e.messageId) === id && (now - Number(e.at || 0)) <= RECENT_ANSWERED_TTL_MS
+    )
+}
+
+const markRecentlyAnswered = (conv, messageIds = []) => {
+    if (!conv) return
+    const now = Date.now()
+    const prev = Array.isArray(conv.recentlyAnswered) ? conv.recentlyAnswered : []
+    const pruned = prev.filter(e => e && (now - Number(e.at || 0)) <= RECENT_ANSWERED_TTL_MS)
+    for (const id of messageIds) {
+        const sid = String(id || '').trim()
+        if (!sid) continue
+        if (pruned.some(e => String(e.messageId) === sid)) continue
+        pruned.push({ messageId: sid, at: now })
+    }
+    // Cap: conservar solo los últimos RECENT_ANSWERED_MAX
+    conv.recentlyAnswered = pruned.slice(-RECENT_ANSWERED_MAX)
 }
 
 // ============================================================
@@ -408,6 +457,29 @@ export const waitForMyMessageEntryInBuffer = async (phone, {
     const startedAt = Date.now()
     const idTarget = String(messageId || '').trim()
     const contentNorm = String(contentCandidate || '').trim()
+
+    // ============================================================
+    // GUARD "RESPUESTA FANTASMA": si este messageId YA fue respondido
+    // (su entry fue limpiada tras la respuesta) y BuilderBot despachó
+    // el flujo tarde, NO esperamos: retornamos already_answered para
+    // que el flujo termine en silencio (sin legacy duplicado).
+    // ============================================================
+    if (idTarget && isRecentlyAnswered(conv, idTarget)) {
+        defaultLogger.info('waitForMyMessageEntryInBuffer: mensaje YA RESPONDIDO previamente → flujo no debe responder de nuevo', {
+            phoneKey, phone,
+            type: typeNorm,
+            messageId: idTarget,
+            contentPreview: contentNorm.slice(0, 100),
+            action: 'conversation_wait_my_entry_already_answered',
+            file
+        })
+        return {
+            version: 0,
+            entryId: null,
+            messageId: idTarget,
+            matchedBy: 'already_answered'
+        }
+    }
 
     defaultLogger.info('waitForMyMessageEntryInBuffer: esperando a que mi mensaje entre al buffer', {
         phoneKey, phone,
@@ -1911,10 +1983,14 @@ export const clearConversationAfterResponse = (phone, {
     let preservedVersionsBefore = []
     let preservedLastActivityAt = 0
     let preservedMaxVersion = 0
+    // messageIds de los mensajes que se respondieron en este turno
+    // (version <= finalVersion). Sirven para evitar "respuesta fantasma".
+    const answeredMessageIds = []
     if (finalVersion !== undefined && Number(conv.version) !== Number(finalVersion)) {
         const rawPreserved = conv.messages.filter(m => {
             if (Number(m.version || 0) <= Number(finalVersion)) {
                 removedCount++
+                if (m.messageId) answeredMessageIds.push(m.messageId)
                 return false
             }
             preservedCount++
@@ -1977,7 +2053,16 @@ export const clearConversationAfterResponse = (phone, {
         // Caso: NO hubo mensajes nuevos durante IA → limpiar todo normal.
         removedCount = totalBeforeCount
         preservedCount = 0
+        for (const m of conv.messages) {
+            if (m && m.messageId) answeredMessageIds.push(m.messageId)
+        }
         conv.messages = []
+    }
+
+    // Registrar los messageIds respondidos para evitar "respuesta fantasma"
+    // (flujos que BuilderBot despacha tarde sobre mensajes ya respondidos).
+    if (answeredMessageIds.length > 0) {
+        markRecentlyAnswered(conv, answeredMessageIds)
     }
 
     // ============================================================
