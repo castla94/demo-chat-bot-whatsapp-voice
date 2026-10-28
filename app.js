@@ -355,9 +355,9 @@ const main = async () => {
         // Inicializar adaptadores
         const adapterDB = new Database()
         const adapterFlow = createFlow([
-           chatbot, media, voice
+           chatbot, media, voice 
         ]);
-        const adapterProvider = createProvider(Provider,{ version: [2, 3000, 1045285769]});
+        const adapterProvider = createProvider(Provider,{ version: [2, 3000, 1051993126]});
 
         // Crear instancia del bot
         const { httpServer } = await createBot({

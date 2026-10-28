@@ -76,7 +76,6 @@ export const handler = async (event) => {
     .replaceAll('{whatsapp_goal}', items.goal);
     
     prompt = prompt + obtenerFechaChile()
-    prompt = prompt + await obtenerNotaInterna(email, phone)
     
     const getIntegration = await searchInDynamoDB(email)
     
@@ -89,6 +88,9 @@ export const handler = async (event) => {
         prompt = resultIntegration
       }
     }
+
+    // Añadir la nota al final, una vez resueltas todas las integraciones.
+    prompt = await obtenerNotaInterna(email, phone) + prompt
 
     console.log("prompt:",prompt)
 
