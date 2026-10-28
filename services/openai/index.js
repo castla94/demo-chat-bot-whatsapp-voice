@@ -423,7 +423,7 @@ export const run = async (name, history, question, phone,imageBase64 = "") => {
             return "¡Hola! 👋 Gracias por contactarnos. En este momento no podemos atender tu consulta, pero no te preocupes, nos pondremos en contacto contigo lo antes posible. 🙏\nSi necesitas ayuda urgente, puedes dejar un mensaje con los detalles de tu consulta, y te responderemos tan pronto como podamos.\n¡Gracias por tu paciencia! 😊";
         }
 
-        const prompt = await generatePrompt(name, question);
+        const prompt = await generatePrompt(name, question, phone);
         const { modelSelected, classification, classificationEnabled } = await resolveModelSelection(question);
         const { finalQuestion, dateExtracted, dateApplied } = resolveOpenAIQuestion(classification?.requires_strong_model, question);
         defaultLogger.info('Modelo seleccionado para consulta', {

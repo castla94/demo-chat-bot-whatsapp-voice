@@ -436,14 +436,16 @@ export const whatsappStatus = async () => {
 
 /**
  * Obtiene el prompt configurado para WhatsApp
+ * @param {string} question - Pregunta o consulta del cliente
+ * @param {string} phone - Número de teléfono del cliente
  * @returns {Promise<Object|null>} Configuración del prompt o null si hay error
  */
-export const promptGetWhatsapp = async (question) => {
+export const promptGetWhatsapp = async (question, phone) => {
   const endpoint = `${BASE_URL}/whatsapp-prompt`;
   const email = process.env.EMAIL_TOKEN;
 
   try {
-    const response = await axios.post(endpoint, { email, question });
+    const response = await axios.post(endpoint, { email, question, phone });
     return response.data;
   } catch (error) {
     defaultLogger.error('Error obteniendo prompt', {

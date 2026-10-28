@@ -85,10 +85,11 @@ DIRECTRICES PARA RESPONDER AL CLIENTE:
  * Genera un prompt personalizado para el cliente
  * @param {string} name - Nombre del cliente
  * @param {string} question - Pregunta o consulta del cliente
+ * @param {string} phone - Número de teléfono del cliente
  * @returns {Promise<string>} Prompt personalizado
  */
-export const generatePrompt = async (name,question) => {
-    const getWhatsappPrompt = await promptGetWhatsapp(question);
+export const generatePrompt = async (name,question,phone) => {
+    const getWhatsappPrompt = await promptGetWhatsapp(question, phone);
     if(getWhatsappPrompt && getWhatsappPrompt.prompt){
         defaultLogger.info('Obteniendo prompt desde base de datos', {
             action: 'get_prompt_from_db',
