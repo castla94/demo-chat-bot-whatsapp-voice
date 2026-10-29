@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DynamoDBClient, GetItemCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
  
@@ -11,8 +12,39 @@ const dynamoDBClient = new DynamoDBClient({ region: 'us-east-1' });
 // Define el nombre de la tabla de DynamoDB
 const tableName = "whatsapp_prompt";
 
+// Mantiene el identificador de la solicitud también en los procesos auxiliares.
+const logContext = new AsyncLocalStorage();
+
+function logFailure(process, error, details = {}) {
+  console.error(JSON.stringify({
+    level: 'ERROR',
+    timestamp: new Date().toISOString(),
+    ...logContext.getStore(),
+    process,
+    ...details,
+    error: {
+      name: error?.name,
+      message: error?.message || String(error),
+      stack: error?.stack,
+      code: error?.code,
+      awsRequestId: error?.$metadata?.requestId,
+      httpStatusCode: error?.$metadata?.httpStatusCode
+    }
+  }));
+}
+
+function checkLambdaResponse(response) {
+  if (response.FunctionError || response.StatusCode >= 400) {
+    throw new Error(`Lambda invocation failed: ${response.FunctionError || response.StatusCode}`);
+  }
+}
+
 // Función Lambda handler
-export const handler = async (event) => {
+export const handler = async (event, context) => logContext.run({
+  requestId: context?.awsRequestId || event?.requestContext?.requestId
+}, async () => {
+  let stage = 'parse_request';
+  try {
 
     
   const { email,question,phone } =  JSON.parse(event.body);
@@ -21,6 +53,7 @@ export const handler = async (event) => {
   console.log("prompt query : ",[email,question])
 
   if (!email) {
+    logFailure('validate_request', new Error('Missing required email'));
     return {
        headers: {
             "Access-Control-Allow-Origin": "*", // Or specify your domain
@@ -39,12 +72,13 @@ export const handler = async (event) => {
     }
   };
 
-  try {
+    stage = 'get_prompt';
     // Ejecuta la operación GetItem en DynamoDB
     const command = new GetItemCommand(params);
     const data = await dynamoDBClient.send(command);
     
     if (!data.Item) {
+      logFailure('get_prompt', new Error('Item not found'), { tableName });
       return {
          headers: {
             "Access-Control-Allow-Origin": "*", // Or specify your domain
@@ -61,6 +95,7 @@ export const handler = async (event) => {
       Object.entries(data.Item).map(([key, value]) => [key, Object.values(value)[0]])
     );
 
+    stage = 'build_prompt';
     const prompt_draft = items.prompt;
     const url_menu = items.s3_url_menu;
 
@@ -77,11 +112,13 @@ export const handler = async (event) => {
     
     prompt = prompt + obtenerFechaChile()
     
+    stage = 'get_integrations';
     const getIntegration = await searchInDynamoDB(email)
     
     console.log("getIntegration",getIntegration)
     
     if(getIntegration !== null && getIntegration.status){
+      stage = 'process_integrations';
       const resultIntegration =  await processStringWithIntegrations(prompt,getIntegration,question)
       console.log("resultIntegration",resultIntegration)
       if(resultIntegration !== null){
@@ -90,6 +127,7 @@ export const handler = async (event) => {
     }
 
     // Añadir la nota al final, una vez resueltas todas las integraciones.
+    stage = 'get_internal_note';
     prompt = await obtenerNotaInterna(email, phone) + prompt
 
     console.log("prompt:",prompt)
@@ -104,7 +142,7 @@ export const handler = async (event) => {
       body: JSON.stringify({prompt:prompt,url_menu:url_menu,welcome:items.welcome,products:items.products,products_dynamic:items?.products_dynamic})
     };
   } catch (error) {
-    console.error('Error getting item from DynamoDB', error);
+    logFailure(stage, error);
     return {
        headers: {
             "Access-Control-Allow-Origin": "*", // Or specify your domain
@@ -115,7 +153,7 @@ export const handler = async (event) => {
       body: JSON.stringify({ message: 'Error getting item from DynamoDB', error: error.message })
     };
   }
-};
+});
 
 
 async function lambdaGoogleDoc(url) {
@@ -129,15 +167,21 @@ async function lambdaGoogleDoc(url) {
     const command = new InvokeCommand(params);
     const response = await client.send(command);
 
+    checkLambdaResponse(response);
+
     // response.Payload es un Uint8Array -> hay que transformarlo
     const payloadString = Buffer.from(response.Payload).toString("utf8");
     const result = JSON.parse(payloadString);
+
+    if (result.statusCode >= 400 || typeof result.body?.text !== 'string') {
+      throw new Error(`Invalid integration response (status: ${result.statusCode ?? 'unknown'})`);
+    }
 
     console.log("Respuesta desde lambdaGoogleDoc:", result.body.text);
 
     return result.body.text; // Devuelve la respuesta de Lambda B como objeto JSON pars
   } catch (error) {
-    console.error("Error al invocar lambdaGoogleDoc", error);
+    logFailure('lambdaGoogleDoc', error);
     return null
   }
 }
@@ -154,15 +198,21 @@ async function lambdaGoogleCalendar(url) {
     const command = new InvokeCommand(params);
     const response = await client.send(command);
 
+    checkLambdaResponse(response);
+
     // response.Payload es un Uint8Array -> hay que transformarlo
     const payloadString = Buffer.from(response.Payload).toString("utf8");
     const result = JSON.parse(payloadString);
+
+    if (result.statusCode >= 400 || typeof result.body?.text !== 'string') {
+      throw new Error(`Invalid integration response (status: ${result.statusCode ?? 'unknown'})`);
+    }
 
     console.log("Respuesta desde lambdaGoogleCalendar:", result);
 
     return result.body.text; // Devuelve la respuesta de Lambda B como objeto JSON pars
   } catch (error) {
-    console.error("Error al invocar lambdaGoogleCalendar", error);
+    logFailure('lambdaGoogleCalendar', error);
     return null
   }
 }
@@ -179,15 +229,21 @@ async function lambdaGoogleSheet(url) {
     const command = new InvokeCommand(params);
     const response = await client.send(command);
 
+    checkLambdaResponse(response);
+
     // response.Payload es un Uint8Array -> hay que transformarlo
     const payloadString = Buffer.from(response.Payload).toString("utf8");
     const result = JSON.parse(payloadString);
+
+    if (result.statusCode >= 400 || typeof result.body?.text !== 'string') {
+      throw new Error(`Invalid integration response (status: ${result.statusCode ?? 'unknown'})`);
+    }
 
     console.log("Respuesta desde lambdaGoogleSheet:", result.body.text);
 
     return result.body.text; // Devuelve la respuesta de Lambda B como objeto JSON pars
   } catch (error) {
-    console.error("Error al invocar lambdaGoogleSheet", error);
+    logFailure('lambdaGoogleSheet', error);
     return null
   }
 }
@@ -203,15 +259,21 @@ async function lambdaJson(url) {
     const command = new InvokeCommand(params);
     const response = await client.send(command);
 
+    checkLambdaResponse(response);
+
     // response.Payload es un Uint8Array -> hay que transformarlo
     const payloadString = Buffer.from(response.Payload).toString("utf8");
     const result = JSON.parse(payloadString);
+
+    if (result.statusCode >= 400 || typeof result.body?.text !== 'string') {
+      throw new Error(`Invalid integration response (status: ${result.statusCode ?? 'unknown'})`);
+    }
 
     console.log("Respuesta desde lambdaJson:", result);
 
     return result.body.text; // Devuelve la respuesta de Lambda B como objeto JSON pars
   } catch (error) {
-    console.error("Error al invocar lambdaJson", error);
+    logFailure('lambdaJson', error);
     return null
   }
 }
@@ -227,15 +289,21 @@ async function lambdaAgenteWeb(url,when_to_activate,message,action_instruction,i
     const command = new InvokeCommand(params);
     const response = await client.send(command);
 
+    checkLambdaResponse(response);
+
     // response.Payload es un Uint8Array -> hay que transformarlo
     const payloadString = Buffer.from(response.Payload).toString("utf8");
     const result = JSON.parse(payloadString);
+
+    if (result.statusCode >= 400 || typeof result.body?.text !== 'string') {
+      throw new Error(`Invalid integration response (status: ${result.statusCode ?? 'unknown'})`);
+    }
 
     console.log("Respuesta desde lambdaAgenteWeb:", result);
 
     return result.body.text; // Devuelve la respuesta de Lambda B como objeto JSON pars
   } catch (error) {
-    console.error("Error al invocar lambdaAgenteWeb", error);
+    logFailure('lambdaAgenteWeb', error);
     return null
   }
 }
@@ -266,7 +334,7 @@ async function callLambdaByType(integration,question) {
         return null;
     }
   } catch (error) {
-    console.error('Error in callLambdaByType:', error);
+    logFailure('callLambdaByType', error, { type: integration?.type, section: integration?.section });
     return null;
   }
 }
@@ -365,7 +433,10 @@ ${String(prompt)}
     console.log("searchInPrompt.response", { ok: response.ok, status: response.status });
 
     if (!response.ok) {
-      console.log("searchInPrompt.http_error");
+      logFailure('searchInPrompt.http', new Error(`HTTP ${response.status}`), {
+        status: response.status,
+        upstreamRequestId: response.headers.get('x-request-id')
+      });
       return "NO HAY INFORMACION";
     }
 
@@ -373,7 +444,10 @@ ${String(prompt)}
     const raw = data.output?.[0]?.content?.[0]?.text;
     console.log("searchInPrompt.raw", { raw });
 
-    if (!raw) return "NO HAY INFORMACION";
+    if (!raw) {
+      logFailure('searchInPrompt.response', new Error('Response has no output text'));
+      return "NO HAY INFORMACION";
+    }
 
     const result = String(raw).trim();
     if (!result) {
@@ -382,9 +456,7 @@ ${String(prompt)}
 
     return result;
   } catch (err) {
-    console.log("searchInPrompt.error", {
-      message: err?.message || ""
-    });
+    logFailure('searchInPrompt', err);
     return "NO HAY INFORMACION";
   }
 }
@@ -404,6 +476,12 @@ async function processStringWithIntegrations(inputString, config,question) {
             if (resultString.includes(token)) {
               console.log("process Integrations MATCH ("+token+")")
               let lambdaResult = await callLambdaByType(integration,question);
+              if (lambdaResult === null) {
+                logFailure('process_integration', new Error('Integration returned no result'), {
+                  type: integration.type,
+                  section: integration.section
+                });
+              }
               //lambdaResult = await searchInPrompt(lambdaResult,question);
               resultString = resultString.replace(token, lambdaResult || '');
             }
@@ -414,7 +492,7 @@ async function processStringWithIntegrations(inputString, config,question) {
 
     return resultString;
   } catch (error) {
-    console.error('Error in processStringWithIntegrations:', error);
+    logFailure('processStringWithIntegrations', error);
     return null;
   }
 }
@@ -440,7 +518,7 @@ export const searchInDynamoDB = async (email) => {
     return unmarshall(data.Item);
     
   } catch (error) {
-    console.error('Error not found whatsapp_integrations:', error);
+    logFailure('searchInDynamoDB', error, { tableName });
     return null
   }
 };
