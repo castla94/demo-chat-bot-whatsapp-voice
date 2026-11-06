@@ -1,652 +1,310 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { DynamoDBClient, GetItemCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
-import { unmarshall } from "@aws-sdk/util-dynamodb";
- 
-import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
+import {
+  DynamoDBClient,
+  GetItemCommand,
+  UpdateItemCommand
+} from "@aws-sdk/client-dynamodb";
 
-const client = new LambdaClient({ region: "us-east-1" });
+const TABLE_NAME = "whatsapp_prompt";
+const PK_NAME = "email";
+const PK_VALUE = "inversionesydalvarez@gmail.com";
+const PK_VALUE2 = "jhonfa144@gmail.com";
+const PK_VALUES = [PK_VALUE, PK_VALUE2];
+const MAX_PAGES = 500;
+const MAX_MARKDOWN_BYTES = 350000;
+const dynamodb = new DynamoDBClient({});
 
-// Crea un cliente de DynamoDB
-const dynamoDBClient = new DynamoDBClient({ region: 'us-east-1' });
-
-// Define el nombre de la tabla de DynamoDB
-const tableName = "whatsapp_prompt";
-
-// Mantiene el identificador de la solicitud también en los procesos auxiliares.
-const logContext = new AsyncLocalStorage();
-
-function logFailure(process, error, details = {}) {
-  console.error(JSON.stringify({
-    level: 'ERROR',
-    timestamp: new Date().toISOString(),
-    ...logContext.getStore(),
-    process,
-    ...details,
-    error: {
-      name: error?.name,
-      message: error?.message || String(error),
-      stack: error?.stack,
-      code: error?.code,
-      awsRequestId: error?.$metadata?.requestId,
-      httpStatusCode: error?.$metadata?.httpStatusCode
-    }
-  }));
+function clean(value) {
+  return String(value ?? "")
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
-function checkLambdaResponse(response) {
-  if (response.FunctionError || response.StatusCode >= 400) {
-    throw new Error(`Lambda invocation failed: ${response.FunctionError || response.StatusCode}`);
-  }
-}
-
-// Función Lambda handler
-export const handler = async (event, context) => logContext.run({
-  requestId: context?.awsRequestId || event?.requestContext?.requestId
-}, async () => {
-  let stage = 'parse_request';
-  try {
-
-    
-  const { email,question,phone } =  JSON.parse(event.body);
-
-  
-  console.log("prompt query : ",[email,question])
-
-  if (!email) {
-    logFailure('validate_request', new Error('Missing required email'));
-    return {
-       headers: {
-            "Access-Control-Allow-Origin": "*", // Or specify your domain
-            "Access-Control-Allow-Headers": "Content-Type",
-            "Access-Control-Allow-Methods": "POST"
-        },
-      statusCode: 400,
-      body: JSON.stringify({ message: 'email is a required query parameter' })
-    };
-  }
-
-  const params = {
-    TableName: tableName,
-    Key: {
-      email: { S: email }
-    }
+function response(statusCode, data) {
+  return {
+    statusCode,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    body: JSON.stringify(data)
   };
-
-    stage = 'get_prompt';
-    // Ejecuta la operación GetItem en DynamoDB
-    const command = new GetItemCommand(params);
-    const data = await dynamoDBClient.send(command);
-    
-    if (!data.Item) {
-      logFailure('get_prompt', new Error('Item not found'), { tableName });
-      return {
-         headers: {
-            "Access-Control-Allow-Origin": "*", // Or specify your domain
-            "Access-Control-Allow-Headers": "Content-Type",
-            "Access-Control-Allow-Methods": "POST"
-        },
-        statusCode: 404,
-        body: JSON.stringify({ message: 'Item not found'})
-      };
-    }
-
-    // Mapear los fields de data.Item a un objeto plano
-    const items = Object.fromEntries(
-      Object.entries(data.Item).map(([key, value]) => [key, Object.values(value)[0]])
-    );
-
-    stage = 'build_prompt';
-    const prompt_draft = items.prompt;
-    const url_menu = items.s3_url_menu;
-
-    let prompt = prompt_draft.replaceAll('{whatsapp_name}', items.name)
-    .replaceAll('{whatsapp_description}', items.description)
-    .replaceAll('{whatsapp_products}', items.products)
-    .replaceAll('{whatsapp_format_order}', items.format_order)
-    .replaceAll('{whatsapp_account_banking}', items.account_banking)
-    .replaceAll('{whatsapp_instruccions_iteration}', items.instruccions_iteration)
-    .replaceAll('{whatsapp_how_responding_customer}', items.how_responding_customer)
-    .replaceAll('{whatsapp_tono}', items.tono)
-    .replaceAll('{whatsapp_welcome}', items.welcome)
-    .replaceAll('{whatsapp_goal}', items.goal);
-    
-    prompt = prompt + obtenerFechaChile()
-    
-    stage = 'get_integrations';
-    const getIntegration = await searchInDynamoDB(email)
-    
-    console.log("getIntegration",getIntegration)
-    
-    if(getIntegration !== null && getIntegration.status){
-      stage = 'process_integrations';
-      const resultIntegration =  await processStringWithIntegrations(prompt,getIntegration,question)
-      console.log("resultIntegration",resultIntegration)
-      if(resultIntegration !== null){
-        prompt = resultIntegration
-      }
-    }
-
-    // Añadir la nota al final, una vez resueltas todas las integraciones.
-    stage = 'get_internal_note';
-    prompt = await obtenerNotaInterna(email, phone) + prompt
-
-    console.log("prompt:",prompt)
-
-    return {
-       headers: {
-            "Access-Control-Allow-Origin": "*", // Or specify your domain
-            "Access-Control-Allow-Headers": "Content-Type",
-            "Access-Control-Allow-Methods": "POST"
-        },
-      statusCode: 200,
-      body: JSON.stringify({prompt:prompt,url_menu:url_menu,welcome:items.welcome,products:items.products,products_dynamic:items?.products_dynamic})
-    };
-  } catch (error) {
-    logFailure(stage, error);
-    return {
-       headers: {
-            "Access-Control-Allow-Origin": "*", // Or specify your domain
-            "Access-Control-Allow-Headers": "Content-Type",
-            "Access-Control-Allow-Methods": "POST"
-        },
-      statusCode: 500,
-      body: JSON.stringify({ message: 'Error getting item from DynamoDB', error: error.message })
-    };
-  }
-});
-
-
-async function lambdaGoogleDoc(url) {
-  try {
-    const params = {
-      FunctionName: "arn:aws:lambda:us-east-1:967208159246:function:integration-whatsapp-google-doc", // nombre o ARN de Lambda B
-      InvocationType: "RequestResponse",
-      Payload: Buffer.from(JSON.stringify({ url: url })),
-    }; 
-
-    const command = new InvokeCommand(params);
-    const response = await client.send(command);
-
-    checkLambdaResponse(response);
-
-    // response.Payload es un Uint8Array -> hay que transformarlo
-    const payloadString = Buffer.from(response.Payload).toString("utf8");
-    const result = JSON.parse(payloadString);
-
-    if (result.statusCode >= 400 || typeof result.body?.text !== 'string') {
-      throw new Error(`Invalid integration response (status: ${result.statusCode ?? 'unknown'})`);
-    }
-
-    console.log("Respuesta desde lambdaGoogleDoc:", result.body.text);
-
-    return result.body.text; // Devuelve la respuesta de Lambda B como objeto JSON pars
-  } catch (error) {
-    logFailure('lambdaGoogleDoc', error);
-    return null
-  }
 }
 
+const TREINTA_STORE_ID = "28bbedc4-78d9-5165-bad0-ab3daecf1b6d";
+const TREINTA_STORE_SLUG = "luegopagoapk";
+const TREINTA_PRODUCTS_URL = "https://tienda.treinta.co/api/storefront/products";
 
-async function lambdaGoogleCalendar(url) {
-  try {
-    const params = {
-      FunctionName: "arn:aws:lambda:us-east-1:967208159246:function:integration-whatsapp-google-calendar", // nombre o ARN de Lambda B
-      InvocationType: "RequestResponse",
-      Payload: Buffer.from(JSON.stringify({ url: url })),
-    }; 
-
-    const command = new InvokeCommand(params);
-    const response = await client.send(command);
-
-    checkLambdaResponse(response);
-
-    // response.Payload es un Uint8Array -> hay que transformarlo
-    const payloadString = Buffer.from(response.Payload).toString("utf8");
-    const result = JSON.parse(payloadString);
-
-    if (result.statusCode >= 400 || typeof result.body?.text !== 'string') {
-      throw new Error(`Invalid integration response (status: ${result.statusCode ?? 'unknown'})`);
-    }
-
-    console.log("Respuesta desde lambdaGoogleCalendar:", result);
-
-    return result.body.text; // Devuelve la respuesta de Lambda B como objeto JSON pars
-  } catch (error) {
-    logFailure('lambdaGoogleCalendar', error);
-    return null
+async function requestTreinta(url, context) {
+  const remaining = context?.getRemainingTimeInMillis?.() ?? Infinity;
+  const timeout = Math.min(30000, Math.floor(remaining - 5000));
+  if (timeout < 1000) {
+    throw new Error("Tiempo insuficiente para consultar Treinta: queda menos de 1 segundo disponible después de reservar 5 segundos para finalizar");
   }
-}
-
-
-async function lambdaGoogleSheet(url) {
-  try {
-    const params = {
-      FunctionName: "arn:aws:lambda:us-east-1:967208159246:function:integration-whatsapp-google-sheet", // nombre o ARN de Lambda B
-      InvocationType: "RequestResponse",
-      Payload: Buffer.from(JSON.stringify({ url: url })),
-    }; 
-
-    const command = new InvokeCommand(params);
-    const response = await client.send(command);
-
-    checkLambdaResponse(response);
-
-    // response.Payload es un Uint8Array -> hay que transformarlo
-    const payloadString = Buffer.from(response.Payload).toString("utf8");
-    const result = JSON.parse(payloadString);
-
-    if (result.statusCode >= 400 || typeof result.body?.text !== 'string') {
-      throw new Error(`Invalid integration response (status: ${result.statusCode ?? 'unknown'})`);
-    }
-
-    console.log("Respuesta desde lambdaGoogleSheet:", result.body.text);
-
-    return result.body.text; // Devuelve la respuesta de Lambda B como objeto JSON pars
-  } catch (error) {
-    logFailure('lambdaGoogleSheet', error);
-    return null
-  }
-}
-
-async function lambdaJson(url) {
-  try {
-    const params = {
-      FunctionName: "arn:aws:lambda:us-east-1:967208159246:function:integration-whatsapp-json", // nombre o ARN de Lambda B
-      InvocationType: "RequestResponse",
-      Payload: Buffer.from(JSON.stringify({ url: url })),
-    }; 
-
-    const command = new InvokeCommand(params);
-    const response = await client.send(command);
-
-    checkLambdaResponse(response);
-
-    // response.Payload es un Uint8Array -> hay que transformarlo
-    const payloadString = Buffer.from(response.Payload).toString("utf8");
-    const result = JSON.parse(payloadString);
-
-    if (result.statusCode >= 400 || typeof result.body?.text !== 'string') {
-      throw new Error(`Invalid integration response (status: ${result.statusCode ?? 'unknown'})`);
-    }
-
-    console.log("Respuesta desde lambdaJson:", result);
-
-    return result.body.text; // Devuelve la respuesta de Lambda B como objeto JSON pars
-  } catch (error) {
-    logFailure('lambdaJson', error);
-    return null
-  }
-}
-
-async function lambdaAgenteWeb(url,when_to_activate,message,action_instruction,information_to_obtain) {
-  try {
-    const params = {
-      FunctionName: "arn:aws:lambda:us-east-1:967208159246:function:integration-whatsapp-agente-web", // nombre o ARN de Lambda B
-      InvocationType: "RequestResponse",
-      Payload: Buffer.from(JSON.stringify({ url: url, when_to_activate:when_to_activate,message:message,action_instruction:action_instruction,information_to_obtain:information_to_obtain })),
-    }; 
-
-    const command = new InvokeCommand(params);
-    const response = await client.send(command);
-
-    checkLambdaResponse(response);
-
-    // response.Payload es un Uint8Array -> hay que transformarlo
-    const payloadString = Buffer.from(response.Payload).toString("utf8");
-    const result = JSON.parse(payloadString);
-
-    if (result.statusCode >= 400 || typeof result.body?.text !== 'string') {
-      throw new Error(`Invalid integration response (status: ${result.statusCode ?? 'unknown'})`);
-    }
-
-    console.log("Respuesta desde lambdaAgenteWeb:", result);
-
-    return result.body.text; // Devuelve la respuesta de Lambda B como objeto JSON pars
-  } catch (error) {
-    logFailure('lambdaAgenteWeb', error);
-    return null
-  }
-}
-
-
-// 🔹 Aquí defines qué hacer por cada tipo
-async function callLambdaByType(integration,question) {
-  try {
-    switch (integration.type) {
-      case 'json':
-        console.log(`📦 Llamando Lambda para JSON en sección ${integration.section} -> ${integration.url}`);
-        return await lambdaJson(integration.url);
-      case 'google_sheets':
-        console.log(`📊 Llamando Lambda para Google Sheets en sección ${integration.section} -> ${integration.url}`);
-        return await lambdaGoogleSheet(integration.url);
-      case 'google_calendar':
-        console.log(`📅 Llamando Lambda para Google Calendar en sección ${integration.section} -> ${integration.url}`);
-        return await lambdaGoogleCalendar(integration.url);
-      case 'google_doc':
-        console.log(` Llamando Lambda para Google Doc en sección ${integration.section} -> ${integration.url}`);
-        return await lambdaGoogleDoc(integration.url);
-      case 'web_agent':
-        console.log(` Llamando Lambda para Agente Web en sección ${integration.section} -> ${integration.url}`);
-        return await lambdaAgenteWeb(integration.url,integration.when_to_activate,question,integration.action_instruction,integration.information_to_obtain) ;
-
-      default:
-        console.warn(`⚠️ Tipo no soportado: ${integration.type}`);
-        return null;
-    }
-  } catch (error) {
-    logFailure('callLambdaByType', error, { type: integration?.type, section: integration?.section });
-    return null;
-  }
-}
-
-
-async function searchInPrompt(
-  prompt,
-  question
-) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  const url = "https://api.openai.com/v1/responses";
-  console.log("searchInPrompt.start", {
-    hasApiKey: !!apiKey,
-    hasPrompt: !!prompt,
-    hasQuestion: !!question
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Referer: `https://tienda.treinta.co/${TREINTA_STORE_SLUG}`
+    },
+    signal: AbortSignal.timeout(timeout)
   });
 
-  if (!prompt || !question) {
-    return "NO HAY INFORMACION";
+  if (!res.ok) {
+    throw new Error(`Treinta HTTP ${res.status}`);
   }
 
-  const systemText = `
-Eres un asistente que busca informacion dentro de una fuente de texto tabular.
+  return res.json();
+}
 
-Recibiras:
-1) Un texto fuente llamado prompt.
-2) Una pregunta del usuario.
+export async function getTreintaProducts(context) {
+  const products = [];
+  const errors = [];
+  const seen = new Set();
+  let total = 0;
 
-Tu tarea:
-- Buscar dentro del prompt filas o bloques de informacion relacionados con la pregunta del usuario.
-- La busqueda no debe ser solamente exacta; tambien debe considerar coincidencias parciales, semanticas, categorias, meses, rangos, productos, nombres parecidos y contexto relacionado.
-- Si la pregunta es amplia o parcial, devuelve todas las filas relevantes que ayuden a responder.
-- Ejemplo: si la pregunta es "junio", debes devolver todas las filas que contengan fechas, eventos, productos o informacion relacionada con junio, aunque la fecha no venga exactamente igual a la pregunta.
-- Debes interpretar fechas en lenguaje natural y relacionarlas con fechas escritas en otros formatos.
-- Si el usuario pregunta por disponibilidad, fechas, reservas, agenda o calendario, debes buscar usando equivalencias de fecha aunque no coincidan literalmente.
-- Debes entender referencias como: "hoy", "manana", "pasado manana", "este viernes", "proximo viernes", "viernes 26", "26 de junio", "junio", "fin de semana", "semana proxima".
-- Debes relacionar fechas aunque en el prompt aparezcan en otro formato, por ejemplo:
-  "viernes 26" puede corresponder a "26/06/2026", "2026-06-26", "26-06-2026", "26 de junio", "viernes 26 de junio".
-- Si el usuario entrega un mes, devuelve todas las filas de ese mes.
-- Si el usuario entrega un dia de la semana con numero, devuelve todas las filas compatibles con esa combinacion o muy cercanas semanticamente.
-- Si el usuario pregunta por un producto, servicio, categoria, ciudad, nombre o caracteristica, devuelve todas las filas relacionadas aunque usen sinonimos o texto parecido.
-- Si la pregunta apunta a una categoria o concepto general, devuelve todas las filas que pertenezcan a esa categoria o que sean claramente relevantes.
-- Si encuentras coincidencias, devuelve SOLO las filas encontradas en el mismo formato original del prompt.
-- Si no encuentras coincidencia suficiente, devuelve exactamente: NO HAY INFORMACION
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const url = new URL(TREINTA_PRODUCTS_URL);
+    url.search = new URLSearchParams({
+      storeId: TREINTA_STORE_ID,
+      page: String(page),
+      pageSize: "12",
+      storeSlug: TREINTA_STORE_SLUG,
+      withPriceBands: "1"
+    }).toString();
 
-Reglas:
-- No inventes datos.
-- No resumes ni reformatees.
-- No expliques el resultado.
-- No agregues markdown.
-- Si hay multiples filas relevantes, devuelvelas todas separadas por salto de linea.
-- Prioriza recall util sobre una coincidencia demasiado estricta.
-- Si la consulta del usuario es ambigua pero apunta claramente a un conjunto de resultados, devuelve todas las filas potencialmente utiles.
-- Solo responde NO HAY INFORMACION cuando realmente no exista ninguna fila razonablemente relacionada.
-- Devuelve unicamente las filas encontradas o NO HAY INFORMACION.
-`.trim();
-
-  const userText = `
-Pregunta del usuario: ${JSON.stringify(question)}
-
-Texto fuente:
-${String(prompt)}
-`.trim();
-
-  const payload = {
-    model: "gpt-4o-mini",
-    input: [
-      {
-        role: "system",
-        content: [{ type: "input_text", text: systemText }]
-      },
-      {
-        role: "user",
-        content: [{ type: "input_text", text: userText }]
-      }
-    ],
-    text: {
-      format: { type: "text" }
-    },
-    temperature: 0.2,
-    max_output_tokens: 1200,
-    top_p: 1
-  };
-
-  const headers = {
-    "Content-Type": "application/json",
-    "Authorization": `Bearer ${apiKey}`
-  };
-
-  try {
-    const response = await global.fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload)
+    const listing = await requestTreinta(url, context);
+    if (!Array.isArray(listing.products) ||
+        !Number.isInteger(listing.total) || listing.total < 0 ||
+        listing.products.some(product => !product?.id)) {
+      throw new Error("Listado de Treinta inválido");
+    }
+    total = listing.total;
+    const batch = listing.products.filter(product => {
+      if (seen.has(product.id)) return false;
+      seen.add(product.id);
+      return true;
     });
-    console.log("searchInPrompt.response", { ok: response.ok, status: response.status });
 
-    if (!response.ok) {
-      logFailure('searchInPrompt.http', new Error(`HTTP ${response.status}`), {
-        status: response.status,
-        upstreamRequestId: response.headers.get('x-request-id')
-      });
-      return "NO HAY INFORMACION";
+    const results = await Promise.allSettled(batch.map(async product => {
+      const detailUrl = new URL(
+        `${TREINTA_PRODUCTS_URL}/${encodeURIComponent(product.id)}`
+      );
+      detailUrl.searchParams.set("storeId", TREINTA_STORE_ID);
+      const detail = await requestTreinta(detailUrl, context);
+      if (!detail.product || detail.product.id !== product.id) {
+        throw new Error("Detalle de Treinta inválido");
+      }
+      return { ...product, ...detail.product };
+    }));
+
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") {
+        products.push(result.value);
+      } else {
+        errors.push({
+          id: batch[index].id,
+          message: result.reason?.message || String(result.reason)
+        });
+      }
+    });
+
+    if (seen.size >= total) {
+      return { products, total, errors, fetchedAt: new Date().toISOString() };
     }
-
-    const data = await response.json();
-    const raw = data.output?.[0]?.content?.[0]?.text;
-    console.log("searchInPrompt.raw", { raw });
-
-    if (!raw) {
-      logFailure('searchInPrompt.response', new Error('Response has no output text'));
-      return "NO HAY INFORMACION";
+    if (!batch.length) {
+      throw new Error("La paginación de Treinta terminó antes de completar el catálogo");
     }
-
-    const result = String(raw).trim();
-    if (!result) {
-      return "NO HAY INFORMACION";
-    }
-
-    return result;
-  } catch (err) {
-    logFailure('searchInPrompt', err);
-    return "NO HAY INFORMACION";
   }
+
+  throw new Error("Se alcanzó el límite de páginas de Treinta");
 }
 
+// Generar el catálogo usando los precios de cada variante de Treinta.
+export function generateMarkdown(products) {
+  const groups = new Map();
+  for (const product of products) {
+    const category = clean(product.category) || "SIN CATEGORÍA";
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(product);
+  }
 
- 
-// 🔹 Función principal que analiza el string
-async function processStringWithIntegrations(inputString, config,question) {
-  try {
-    let resultString = inputString;
+  const lines = [
+    "# CATÁLOGO DE PRODUCTOS - LUEGOPAGO",
+    "",
+    `Actualizado: ${new Date().toISOString()}`,
+    `Total de referencias: ${products.length}`,
+    "",
+    "- Precios expresados en USD, obtenidos de Treinta.",
+    "- Cada método de pago tiene su propio precio; respetar la tarifa indicada.",
+    "- El stock es único por producto y compartido entre todos los métodos de pago.",
+    "- No inventar productos, precios ni características.",
+    ""
+  ];
 
-    for (const integration of config.integrations) {
-      const fieldSection = integration.section.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
-      const token = `{#FUENTE_DATO_${fieldSection}}`;
-        if(integration.status){
-            console.log("resultString.includes("+token+")",resultString)
-            if (resultString.includes(token)) {
-              console.log("process Integrations MATCH ("+token+")")
-              let lambdaResult = await callLambdaByType(integration,question);
-              if (lambdaResult === null) {
-                logFailure('process_integration', new Error('Integration returned no result'), {
-                  type: integration.type,
-                  section: integration.section
-                });
-              }
-              //lambdaResult = await searchInPrompt(lambdaResult,question);
-              resultString = resultString.replace(token, lambdaResult || '');
-            }
-        }else{
-          console.log("Integration ("+token+") Disabled")
+  function addPrice(value) {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      lines.push(`- Precio: $${value.toFixed(2)} USD`);
+    }
+  }
+
+
+
+  for (const category of [...groups.keys()].sort((a, b) => a.localeCompare(b, "es"))) {
+    lines.push(`## ${category}`, "");
+    const items = groups.get(category).sort((a, b) =>
+      clean(a.name).localeCompare(clean(b.name), "es", { numeric: true })
+    );
+    for (const product of items) {
+      lines.push(`### ${clean(product.name)}`);
+      if (clean(product.description)) lines.push(`- Descripción: ${clean(product.description)}`);
+      if (typeof product.available === "boolean") {
+        lines.push(`- Disponible: ${product.available ? "Sí" : "No"}`);
+      }
+      if (product.stock != null) lines.push(`- Stock total: ${clean(product.stock)}`);
+
+      const variants = Array.isArray(product.variants) ? product.variants : [];
+      if (variants.length) {
+        for (const variant of variants) {
+          lines.push("", `#### ${clean(variant.name) || "Variante"}`);
+          addPrice(variant.price);
+          for (const attribute of Array.isArray(variant.attributes) ? variant.attributes : []) {
+            lines.push(`- ${clean(attribute.name)}: ${clean(attribute.value)}`);
+          }
         }
+      } else if (!product.hasVariants) {
+        addPrice(product.price);
+      } else {
+        throw new Error(`Producto con variantes sin detalle: ${product.id}`);
+      }
+      lines.push("");
     }
-
-    return resultString;
-  } catch (error) {
-    logFailure('processStringWithIntegrations', error);
-    return null;
   }
+  return lines.join("\n").trim();
 }
 
-export const searchInDynamoDB = async (email) => {
-  const tableName = "whatsapp_integrations";
+async function getPromptItem(pk) {
+  const data = await dynamodb.send(
+    new GetItemCommand({
+      TableName: TABLE_NAME,
+      Key: {
+        [PK_NAME]: { S: pk }
+      },
+      ConsistentRead: true
+    })
+  );
 
-  const params = {
-    TableName: tableName,
-    Key: {
-      email: { S: email }
-    }
-  };
+  if (!data.Item) {
+    throw new Error(
+      `No existe ${pk} en ${TABLE_NAME}`
+    );
+  }
 
+  return data.Item;
+}
+
+// ==========================================
+// DYNAMODB UPDATE SOLO PRODUCTS
+// ==========================================
+
+async function updateProducts(markdown, pk) {
+  await dynamodb.send(
+    new UpdateItemCommand({
+      TableName: TABLE_NAME,
+      Key: {
+        [PK_NAME]: { S: pk }
+      },
+      UpdateExpression:
+        "SET #products = :value",
+      ConditionExpression:
+        "attribute_exists(#pk)",
+      ExpressionAttributeNames: {
+        "#products": "products",
+        "#pk": PK_NAME
+      },
+      ExpressionAttributeValues: {
+        ":value": { S: markdown }
+      },
+      ReturnValues: "NONE"
+    })
+  );
+}
+
+export const handler = async (event = {}, context) => {
   try {
-    const command = new GetItemCommand(params);
-    const data = await dynamoDBClient.send(command);
-    
-    if (!data.Item) {
-      return null;
+    const input = typeof event.body === "string"
+      ? JSON.parse(event.body || "{}")
+      : event.body && typeof event.body === "object" ? event.body : event;
+    const dryRun = input?.dryRun === true;
+    const catalog = await getTreintaProducts(context);
+
+    // No reemplazar el catálogo guardado con una descarga incompleta.
+    if (catalog.errors.length) {
+      return response(502, {
+        success: false,
+        message: "No fue posible obtener todos los detalles de Treinta",
+        total_products: catalog.total,
+        fetched_products: catalog.products.length,
+        errors: catalog.errors
+      });
     }
-    
-    return unmarshall(data.Item);
-    
+    if (!catalog.products.length) throw new Error("Catálogo de Treinta vacío");
+
+    const markdown = generateMarkdown(catalog.products);
+    const bytes = Buffer.byteLength(markdown, "utf8");
+    if (bytes > MAX_MARKDOWN_BYTES) {
+      throw new Error(`Markdown demasiado grande: ${bytes} bytes`);
+    }
+    const summary = {
+      total_products: catalog.products.length,
+      markdown_bytes: bytes
+    };
+    if (dryRun) {
+      return response(200, {
+        success: true,
+        dryRun: true,
+        ...summary,
+        preview: markdown
+      });
+    }
+
+    await Promise.all(PK_VALUES.map(pk => getPromptItem(pk)));
+    console.log("markdown: ",markdown)
+    const results = await Promise.allSettled(
+      PK_VALUES.map(pk => updateProducts(markdown, pk))
+    );
+    const updated = PK_VALUES.filter((pk, index) => results[index].status === "fulfilled");
+    const errors = results.flatMap((result, index) => result.status === "rejected"
+      ? [{ pk: PK_VALUES[index], message: result.reason?.message || String(result.reason) }]
+      : []);
+    if (errors.length) {
+      return response(500, {
+        success: false,
+        table: TABLE_NAME,
+        updated_field: "products",
+        updated_pks: updated,
+        errors,
+        message: "No fue posible actualizar todos los registros"
+      });
+    }
+    return response(200, {
+      success: true,
+      table: TABLE_NAME,
+      pk: PK_VALUE,
+      pks: PK_VALUES,
+      updated_field: "products",
+      ...summary,
+      message: "Catálogo de Treinta actualizado correctamente"
+    });
   } catch (error) {
-    logFailure('searchInDynamoDB', error, { tableName });
-    return null
+    console.error(error);
+    return response(500, {
+      success: false,
+      table: TABLE_NAME,
+      pk: PK_VALUE,
+      pks: PK_VALUES,
+      updated_field: "products",
+      message: "No fue posible completar la sincronización",
+      error: error.message
+    });
   }
 };
-
-async function obtenerNotaInterna(email, phone) {
-  if (!phone) {
-    return '';
-  }
-
-  const command = new QueryCommand({
-    TableName: 'whatsapp_notes_sessions',
-    KeyConditionExpression: '#email = :email AND #number_and_type = :number_and_type',
-    ExpressionAttributeNames: {
-      '#email': 'email',
-      '#number_and_type': 'number_and_type',
-      '#text': 'text'
-    },
-    ExpressionAttributeValues: {
-      ':email': { S: email },
-      ':number_and_type': { S: `${phone}#internal` }
-    },
-    ProjectionExpression: '#text'
-  });
-
-  const data = await dynamoDBClient.send(command);
-  const text = data.Items?.[0] ? unmarshall(data.Items[0]).text : null;
-
-  if (typeof text !== 'string' || !text.trim()) {
-    return '';
-  }
-
-  return `\n\nNOTA INTERNA DEL CLIENTE:\n${text}\n\nREGLA DE PRIORIDAD: Siempre debes seguir las indicaciones de la NOTA INTERNA DEL CLIENTE. Si contradicen otras instrucciones de este prompt, las indicaciones de la nota interna tienen prioridad.\n`;
-}
-
-function obtenerFechaChile() {
-  const now = new Date();
-
-  const options = {
-    timeZone: 'America/Santiago',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    weekday: 'long',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  };
-
-  const formatter = new Intl.DateTimeFormat('es-CL', options);
-  const parts = formatter.formatToParts(now);
-
-  const getPart = (type) => parts.find(p => p.type === type)?.value;
-
-  const diaSemana = getPart('weekday');
-  const dia = getPart('day');
-  const mes = getPart('month');
-  const anio = getPart('year');
-  const anionext = parseInt(getPart('year'))+1;
-  const hora = `${getPart('hour')}:${getPart('minute')}`;
-
-  const fecha = `${dia}/${mes}/${anio}`;
-return `\n11. Aprende la fecha y hora actual es :Hoy es ${diaSemana}, ${fecha}.
-📌 INTERPRETACIÓN DE FECHAS:
-1. Siempre que un usuario entregue una fecha **sin año**, debes **asignar automáticamente el año usando la fecha actual como referencia**, aplicando EXCLUSIVAMENTE estas reglas:
-   - **Solo considera el año siguiente (${anionext}) cuando el mes actual es diciembre**.
-   - Si el mes actual es **diciembre** y el usuario indica un **mes que ya pasó** (por ejemplo enero, febrero, etc.), debes **asumir automáticamente que la fecha corresponde al año siguiente (${anionext})**.
-   - En cualquier otro mes del año, si el usuario no indica año, **asume siempre el año actual (${anio})**, incluso si el mes indicado ya pasó.
-   - No evalúes si la fecha es pasada o futura: **solo interpreta el año según estas reglas**.
-
-   👉 Ejemplo clave:
-   - Fecha actual: diciembre ${anio}
-   - Usuario dice: "martes 6 de enero"
-   → Enero es un mes anterior a diciembre → **año = ${anionext}**.
-
-2. Nunca digas que una fecha es inválida solo porque el usuario no incluyó el año.
-3. Nunca corrijas, cuestiones ni preguntes "¿te refieres a...?" cuando la fecha sea interpretable según las reglas anteriores.
-4. Solo pide confirmación si la fecha es ambigua en el **formato día/mes** (ejemplo: 03/04 → ¿3 de abril o 4 de marzo?).
-5. Devuelve siempre la fecha en dos formas:
-   - Forma legible para humanos (ejemplo: martes 6 de enero de ${anionext} o ${anio} según corresponda).
-   - Formato ISO (YYYY-MM-DD).
-6. Zona horaria por defecto: America/Santiago.
-7. Nunca respondas con frases como “esa fecha no es válida” o “esa fecha es incorrecta”.  
-   Si la fecha no existe en el calendario correspondiente, responde únicamente:
-   "Esa fecha no existe en el calendario de ${anio} o ${anionext}. ¿Quieres elegir otra?".
-📌 INTERPRETACIÓN DE FECHAS RELATIVAS:
-8. El asistente debe interpretar expresiones relativas usando la fecha actual como referencia:
-   - "hoy" → fecha actual (${fecha})
-   - "mañana" → fecha actual + 1 día
-   - "pasado mañana" → fecha actual + 2 días
-   - "ayer" → fecha actual - 1 día (solo si aplica al contexto)
-   - "en X días" → sumar X días a la fecha actual
-   - "la próxima semana" → rango desde el lunes siguiente
-   - "este [día de la semana]" → el siguiente día correspondiente dentro de la semana actual o próxima
-   - Estas fechas deben convertirse siempre a formato legible y formato ISO (YYYY-MM-DD)
-
-📌 INTERPRETACIÓN DE DÍAS DE LA SEMANA:
-9. Si el usuario menciona un día de la semana (ej: "lunes", "viernes") sin fecha:
-   - Debes interpretarlo como el siguiente día correspondiente a partir de la fecha actual.
-   - Si hoy es ese mismo día, asumir el siguiente de la próxima semana.
-
-📌 INTERPRETACIÓN DE HORAS:
-10. El asistente debe reconocer y entender distintos formatos de hora como:
-   - "5pm", "17:00", "5 de la tarde", "17 hrs"
-   - Rangos como "2pm - 4pm"
-   Reglas:
-   - Convertir siempre a formato 24 horas (HH:mm)
-   - Asociar la hora a la fecha detectada
-   - Si el usuario solo entrega una hora, asumir la fecha actual
-   - Si hay ambigüedad (ejemplo: "a las 5"), solicitar confirmación (AM o PM)
-
-📌 COMBINACIÓN FECHA + HORA:
-11. Si el usuario entrega:
-   - Solo fecha → usar fecha interpretada
-   - Solo hora → usar fecha actual
-   - Fecha + hora → combinar ambas correctamente
-
-   👉 Ejemplo:
-   - "mañana a las 5pm" → convertir a YYYY-MM-DD 17:00
-
-📌 AMBIGÜEDAD SEMÁNTICA:
-12. Si el usuario utiliza expresiones ambiguas como:
-   - "en la tarde"
-   - "temprano"
-   - "más rato"
-   - "el otro viernes"
-   Debes solicitar confirmación antes de guardar el dato.
-
-
-*IMPORTANTE: NUNCA INVENTES INFORMACIÓN QUE NO TENGAS EN TU BASE DE CONOCIMIENTO*`;
-
-}
