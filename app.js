@@ -11,6 +11,7 @@ import { defaultLogger } from './helpers/cloudWatchLogger.js';
 import express from 'express';
 import { getWhatsapp, getWhatsappWhitelist, postWhatsappConversation, putWhatsapp } from './services/aws/index.js';
 import { addReceivedFromRawMessage } from './helpers/conversationBuffer.js';
+import { attachWhatsappDiagnostics } from './helpers/whatsappDiagnostics.js';
 
 const app = express();
 const MIME_EXTENSION_MAP = {
@@ -357,7 +358,11 @@ const main = async () => {
         const adapterFlow = createFlow([
            chatbot, media, voice 
         ]);
-        const adapterProvider = createProvider(Provider,{ version: [2, 3000, 1051993126]});
+        // El proveedor obtiene la versión compatible; no sobrescribirla con una fija.
+        const adapterProvider = createProvider(Provider, { baileysLogLevel: 'error' });
+        attachWhatsappDiagnostics(adapterProvider, defaultLogger);
+        attachOwnMessageListener(adapterProvider);
+        attachIncomingConversationListener(adapterProvider);
 
         // Crear instancia del bot
         const { httpServer } = await createBot({
@@ -371,9 +376,6 @@ const main = async () => {
         httpServer(port)
 
         defaultLogger.info('Bot iniciado', { port });
-
-        attachOwnMessageListener(adapterProvider);
-        attachIncomingConversationListener(adapterProvider);
 
         /**
          * Enviar mensaje con metodos propios del provider del bot
